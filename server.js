@@ -241,13 +241,11 @@ app.post('/api/influencers', async (req, res) => {
     }
 
     // Step 1: Search profiles via harvestapi
-    // The SDK uses: search (fuzzy keyword), title, location, page
-    // The Apify actor also needs: takePages, startPage
+    // Actor input fields (from JSON tab): searchQuery, maxItems, autoQuerySegmentation
     // CRITICAL: Pay-per-event actors need maxTotalChargeUsd (set in runApifyActor)
     const searchInput = {
-      search: searchKeywords,
-      takePages: 1,       // 1 page = up to 25 profiles, enough for top 20
-      startPage: 1,
+      searchQuery: searchKeywords,
+      maxItems: 25,
     };
     console.log('Apify search input:', JSON.stringify(searchInput));
 
@@ -272,9 +270,8 @@ app.post('/api/influencers', async (req, res) => {
       console.log('Profile search returned 0. Trying POST search approach...');
       try {
         const postSearchResults = await runApifyActor('harvestapi~linkedin-post-search', {
-          search: searchKeywords,
-          takePages: 1,       // 1 page of posts is enough
-          startPage: 1,
+          searchQuery: searchKeywords,
+          maxItems: 50,
           sortBy: 'relevance',
         }, 0.15);
 
@@ -389,9 +386,8 @@ app.post('/api/influencers', async (req, res) => {
       console.log('Fetching posts via post-search for the niche...');
       try {
         const postSearchResults = await runApifyActor('harvestapi~linkedin-post-search', {
-          search: searchKeywords,
-          takePages: 1,
-          startPage: 1,
+          searchQuery: searchKeywords,
+          maxItems: 50,
           sortBy: 'relevance',
         }, 0.15);
 
