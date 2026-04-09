@@ -266,7 +266,7 @@ app.post('/api/influencers', async (req, res) => {
     }
 
     if (!postSearchResults || postSearchResults.length === 0) {
-      throw new Error('No posts found for this niche. Try broader keywords like "marketing" or "sales".');
+      throw new Error('We couldn\'t find enough content for this niche yet. Try broader terms like "marketing", "sales", or "leadership" — or try a different angle on your topic.');
     }
 
     // Extract unique authors and aggregate their engagement
@@ -333,7 +333,12 @@ app.post('/api/influencers', async (req, res) => {
 
   } catch (err) {
     console.error('Influencer error:', err.message);
-    res.status(500).json({ error: err.message });
+    // Show user-friendly error — never expose internal/technical details
+    let userMessage = err.message;
+    if (userMessage.includes('Apify') || userMessage.includes('API') || userMessage.includes('token') || userMessage.includes('ANTHROPIC')) {
+      userMessage = 'Something went wrong on our end. Please try again in a moment, or try different keywords.';
+    }
+    res.status(500).json({ error: userMessage });
   }
 });
 
