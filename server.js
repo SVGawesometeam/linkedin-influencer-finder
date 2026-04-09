@@ -252,7 +252,7 @@ app.post('/api/influencers', async (req, res) => {
     let postSearchResults = [];
     try {
       postSearchResults = await runApifyActor('harvestapi~linkedin-post-search', {
-        searchQuery: searchKeywords,
+        searchQueries: [searchKeywords],
         maxPosts: 100,
       }, 0.25);
       console.log(`Post search returned ${postSearchResults ? postSearchResults.length : 0} posts`);
@@ -266,7 +266,7 @@ app.post('/api/influencers', async (req, res) => {
     }
 
     if (!postSearchResults || postSearchResults.length === 0) {
-      throw new Error('We couldn\'t find enough content for this niche yet. Try broader terms like "marketing", "sales", or "leadership" — or try a different angle on your topic.');
+      throw new Error('We couldn\'t find influencers for this niche yet. Try broader terms like "marketing", "sales", or "leadership" — or describe your topic differently.');
     }
 
     // Extract unique authors and aggregate their engagement
