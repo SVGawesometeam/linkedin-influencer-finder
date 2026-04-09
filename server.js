@@ -195,10 +195,17 @@ app.post('/api/influencers', async (req, res) => {
       console.log('Keyword expansion failed, using original niche:', e.message);
     }
 
-    // Step 1: Search profiles
+    // Step 1: Search profiles via harvestapi
+    // Field names from @harvestapi/scraper SDK:
+    //   search = fuzzy keyword search
+    //   title  = job title filter
+    //   takePages = number of search result pages (25 results/page)
+    //   startPage = first page (default 1)
+    //   mode = 'short' | 'full' (short = search results only, cheaper)
     const searchInput = {
-      query: searchKeywords,
-      maxProfiles: 50,
+      search: searchKeywords,
+      takePages: 2,
+      startPage: 1,
     };
     console.log('Apify search input:', JSON.stringify(searchInput));
 
@@ -206,6 +213,10 @@ app.post('/api/influencers', async (req, res) => {
     try {
       searchResults = await runApifyActor('harvestapi~linkedin-profile-search', searchInput);
       console.log(`harvestapi returned ${searchResults ? searchResults.length : 0} profiles`);
+      if (searchResults && searchResults.length > 0) {
+        console.log('First result keys:', Object.keys(searchResults[0]).join(', '));
+        console.log('First result sample:', JSON.stringify(searchResults[0]).slice(0, 500));
+      }
     } catch (e) {
       console.log('harvestapi failed:', e.message, '— trying backup actor');
       searchResults = [];
@@ -235,25 +246,28 @@ app.post('/api/influencers', async (req, res) => {
     }
 
     const sorted = searchResults
-      .filter(p => (p.fullName || p.name || p.firstName) && (p.profileUrl || p.url || p.linkedinUrl))
+      .filter(p => (p.fullName || p.name || p.firstName) && (p.profileUrl || p.url || p.linkedinUrl || p.publicIdentifier))
       .map(p => ({
         name: p.fullName || p.name || [p.firstName, p.lastName].filter(Boolean).join(' ') || '',
-        title: p.headline || p.title || p.occupation || '',
-        profileUrl: p.profileUrl || p.url || p.linkedinUrl || '',
-        followers: parseInt(p.followersCount || p.followers || p.followerCount || 0),
-        location: p.location || p.geo || '',
+        title: p.headline || p.position || p.title || p.occupation || '',
+        profileUrl: p.profileUrl || p.url || p.linkedinUrl || (p.publicIdentifier ? `https://www.linkedin.com/in/${p.publicIdentifier}` : ''),
+        followers: parseInt(p.followersCount || p.followers || p.followerCount || p.connectionsCount || 0),
+        location: (typeof p.location === 'object' ? p.location?.linkedinText : p.location) || p.geo || '',
       }))
       .sort((a, b) => b.followers - a.followers)
       .slice(0, 20);
 
     // Step 2: Scrape posts from top 10
+    // harvestapi~linkedin-profile-posts expects: profile (URL or public identifier)
+    // We run one call per profile with scrapePostedLimit to get recent posts
     const profileUrls = sorted.slice(0, 10).map(p => p.profileUrl).filter(Boolean);
 
     let allPosts = [];
     if (profileUrls.length > 0) {
       const postResults = await runApifyActor('harvestapi~linkedin-profile-posts', {
-        profileUrls,
-        maxPosts: 10,
+        profiles: profileUrls,
+        scrapePostedLimit: '3months',
+        takePages: 1,
       });
 
       if (postResults && postResults.length > 0) {
@@ -261,13 +275,13 @@ app.post('/api/influencers', async (req, res) => {
           .filter(p => p.text || p.postText || p.content)
           .map(p => ({
             authorName: p.authorName || p.author?.name || '',
-            authorUrl: p.authorProfileUrl || p.author?.url || '',
+            authorUrl: p.authorProfileUrl || p.author?.linkedinUrl || p.author?.url || '',
             text: (p.text || p.postText || p.content || '').slice(0, 500),
-            likes: parseInt(p.likesCount || p.reactions || p.numLikes || 0),
-            comments: parseInt(p.commentsCount || p.numComments || 0),
-            reposts: parseInt(p.repostsCount || p.numReposts || 0),
-            postUrl: p.postUrl || p.url || '',
-            postedAt: p.postedAt || p.publishedAt || '',
+            likes: parseInt(p.likesCount || p.engagement?.likes || p.reactions || p.numLikes || 0),
+            comments: parseInt(p.commentsCount || p.engagement?.comments || p.numComments || 0),
+            reposts: parseInt(p.repostsCount || p.engagement?.shares || p.numReposts || 0),
+            postUrl: p.postUrl || p.linkedinUrl || p.url || '',
+            postedAt: p.postedAt?.date || p.postedAt || p.publishedAt || '',
           }))
           .map(p => ({ ...p, engagement: p.likes + p.comments * 3 + p.reposts * 2 }))
           .sort((a, b) => b.engagement - a.engagement)
