@@ -298,16 +298,58 @@ app.post('/api/influencers', async (req, res) => {
     }
 
     // Rank authors by total engagement — these are the real top voices
-    const sorted = Array.from(authorMap.values())
+    let sorted = Array.from(authorMap.values())
       .filter(a => a.name && a.profileUrl)
-      .map(a => ({
-        ...a,
-        followers: a.totalEngagement, // Use engagement as the ranking metric
-      }))
       .sort((a, b) => b.totalEngagement - a.totalEngagement)
       .slice(0, 20);
 
     console.log(`Found ${sorted.length} unique authors from ${postSearchResults.length} posts`);
+
+    // Step 2: Get real follower counts for top authors
+    // Use profile search in Full mode to enrich with follower data
+    const profileUrls = sorted.map(a => a.profileUrl).filter(Boolean);
+    if (profileUrls.length > 0) {
+      try {
+        console.log(`Enriching ${profileUrls.length} profiles with follower counts...`);
+        const profileData = await runApifyActor('harvestapi~linkedin-profile-scraper', {
+          profileUrls: profileUrls,
+        }, 0.15); // ~$0.004 per profile × 20 = $0.08
+
+        if (profileData && profileData.length > 0) {
+          console.log('Profile enrichment keys:', Object.keys(profileData[0]).join(', '));
+          // Build a lookup map by profile URL or publicIdentifier
+          const followerMap = new Map();
+          for (const p of profileData) {
+            const url = p.linkedinUrl || p.profileUrl || p.url || '';
+            const id = p.publicIdentifier || '';
+            const followers = parseInt(p.followerCount || p.followersCount || p.followers || 0);
+            if (url) followerMap.set(url, followers);
+            if (id) followerMap.set(id, followers);
+            if (url.includes('/in/')) {
+              const slug = url.split('/in/')[1]?.replace(/\/$/, '');
+              if (slug) followerMap.set(slug, followers);
+            }
+          }
+
+          // Merge follower counts into sorted authors
+          sorted = sorted.map(a => {
+            let followers = 0;
+            // Try matching by URL, publicIdentifier, or slug
+            if (followerMap.has(a.profileUrl)) followers = followerMap.get(a.profileUrl);
+            else {
+              const slug = a.profileUrl.split('/in/')[1]?.replace(/\/$/, '');
+              if (slug && followerMap.has(slug)) followers = followerMap.get(slug);
+            }
+            return { ...a, followers };
+          });
+          console.log('Follower enrichment complete');
+        }
+      } catch (e) {
+        console.log('Profile enrichment failed (non-critical):', e.message);
+        // Non-critical — we still have engagement data, just no follower counts
+        sorted = sorted.map(a => ({ ...a, followers: 0 }));
+      }
+    }
 
     // Format posts for display
     const allPosts = postSearchResults

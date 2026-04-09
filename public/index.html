@@ -316,7 +316,7 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   <div id="results" style="display:none">
 
     <h2 class="section-title">Top Influencers <span class="cache-badge" id="cacheBadge" style="display:none">From cache</span></h2>
-    <p class="section-sub">Sorted by follower count. Real LinkedIn profiles scraped live.</p>
+    <p class="section-sub">Sorted by post engagement. Real LinkedIn data scraped live.</p>
     <div class="influencer-grid" id="influencerGrid"></div>
 
     <h2 class="section-title" style="margin-top:2.5rem">Top Posts by Engagement</h2>
@@ -455,7 +455,7 @@ function renderProfiles() {
           <div class="inf-title">${esc(p.title).slice(0, 80)}</div>
         </div>
       </div>
-      <div class="inf-followers">${formatNum(p.followers)} followers</div>
+      <div class="inf-followers">${p.followers ? formatNum(p.followers) + ' followers' : ''}${p.followers && p.postCount ? ' · ' : ''}${p.postCount ? p.postCount + ' post' + (p.postCount > 1 ? 's' : '') + ' found' : ''}</div>
       <a class="inf-link" href="${esc(p.profileUrl)}" target="_blank" rel="noopener">View profile &rarr;</a>
     </div>
   `).join('');
