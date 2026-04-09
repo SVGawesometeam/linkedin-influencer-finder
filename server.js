@@ -156,6 +156,64 @@ async function getCachedNiche(niche) {
   return cached;
 }
 
+// Fuzzy cache: find semantically similar cached search using Claude
+async function getFuzzyCachedNiche(cacheKey) {
+  const fifteenDays = 15 * 24 * 60 * 60 * 1000;
+  const cutoff = new Date(Date.now() - fifteenDays).toISOString();
+
+  // Fetch all recent cache keys from Supabase
+  const results = await supabaseQuery('GET', 'niche_cache', {
+    'select': 'niche',
+    'created_at': `gte.${cutoff}`,
+    'order': 'created_at.desc',
+    'limit': '100',
+  });
+
+  if (!results || results.length === 0) return null;
+
+  // Get unique cache keys
+  const cacheKeys = [...new Set(results.map(r => r.niche))];
+  if (cacheKeys.length === 0) return null;
+
+  console.log(`Fuzzy cache: comparing against ${cacheKeys.length} cached searches`);
+
+  // Ask Claude to find the closest semantic match
+  try {
+    const data = await callAnthropic(
+      `You match search queries. Given a NEW search and a list of CACHED searches, determine if any cached search is semantically close enough to reuse results. "Close enough" means the user is looking for the same type of people/content — minor wording differences are OK, but different topics are NOT.
+
+Return ONLY one of:
+- The exact cached key string if there's a good match
+- "NONE" if nothing is close enough
+
+No explanations, just the answer.`,
+      `NEW SEARCH: "${cacheKey}"
+
+CACHED SEARCHES:
+${cacheKeys.map((k, i) => `${i + 1}. "${k}"`).join('\n')}`,
+      100
+    );
+
+    const match = data.content[0].text.trim();
+    if (match === 'NONE' || !match) return null;
+
+    // Clean up — Claude might return with quotes
+    const cleanMatch = match.replace(/^["']|["']$/g, '');
+
+    // Verify it's actually one of our cache keys
+    const found = cacheKeys.find(k => k === cleanMatch);
+    if (!found) return null;
+
+    console.log(`Fuzzy cache HIT: "${cacheKey}" matched "${found}"`);
+
+    // Now fetch the full cached data for this key
+    return getCachedNiche(found);
+  } catch (e) {
+    console.log('Fuzzy cache matching failed:', e.message);
+    return null;
+  }
+}
+
 async function saveNicheCache(niche, profiles, posts) {
   const normalized = niche.toLowerCase().trim();
   await supabaseQuery('POST', 'niche_cache', {
@@ -211,12 +269,25 @@ app.post('/api/influencers', async (req, res) => {
     // Cache key includes role+goal + version so algorithm changes invalidate old results
     const CACHE_VERSION = 'v8';
     const cacheKey = [CACHE_VERSION, niche, role, goal].filter(Boolean).join('|');
+
+    // 1. Try exact cache match (free, instant)
     const cached = await getCachedNiche(cacheKey);
     if (cached) {
-      console.log(`Cache hit: ${cacheKey}`);
+      console.log(`Exact cache hit: ${cacheKey}`);
       return res.json({
         profiles: JSON.parse(cached.profiles),
         posts: JSON.parse(cached.posts),
+        fromCache: true,
+      });
+    }
+
+    // 2. Try fuzzy cache match via Claude (cheap — avoids expensive Apify calls)
+    const fuzzyCached = await getFuzzyCachedNiche(cacheKey);
+    if (fuzzyCached) {
+      console.log(`Fuzzy cache hit for: ${cacheKey}`);
+      return res.json({
+        profiles: JSON.parse(fuzzyCached.profiles),
+        posts: JSON.parse(fuzzyCached.posts),
         fromCache: true,
       });
     }
