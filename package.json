@@ -1,0 +1,12 @@
+{
+  "name": "linkedin-influencer-finder",
+  "version": "1.0.0",
+  "description": "Find real LinkedIn influencers in your niche using Apify scraping + Claude AI",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2"
+  }
+}
