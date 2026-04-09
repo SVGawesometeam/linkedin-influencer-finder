@@ -195,12 +195,9 @@ app.post('/api/influencers', async (req, res) => {
       console.log('Keyword expansion failed, using original niche:', e.message);
     }
 
-    // Step 1: Search profiles — try multiple param formats for robustness
-    const searchUrl = `https://www.linkedin.com/search/results/people/?keywords=${encodeURIComponent(searchKeywords)}&origin=GLOBAL_SEARCH_HEADER`;
+    // Step 1: Search profiles
     const searchInput = {
-      searchUrl,
-      takePages: 3,
-      maxItems: 50,
+      query: searchKeywords,
       maxProfiles: 50,
     };
     console.log('Apify search input:', JSON.stringify(searchInput));
