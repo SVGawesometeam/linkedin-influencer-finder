@@ -141,8 +141,8 @@ async function getCachedNiche(niche) {
 
   const cached = results[0];
   const ageMs = Date.now() - new Date(cached.created_at).getTime();
-  const sevenDays = 7 * 24 * 60 * 60 * 1000;
-  if (ageMs > sevenDays) return null;
+  const fifteenDays = 15 * 24 * 60 * 60 * 1000;
+  if (ageMs > fifteenDays) return null;
 
   return cached;
 }
@@ -160,6 +160,37 @@ async function saveNicheCache(niche, profiles, posts) {
 }
 
 // =============================================
+// Rate limiting: 5 searches per day per IP
+// =============================================
+const searchCounts = new Map(); // ip -> { count, resetAt }
+
+function checkRateLimit(ip) {
+  const now = Date.now();
+  const entry = searchCounts.get(ip);
+
+  if (!entry || now > entry.resetAt) {
+    searchCounts.set(ip, { count: 1, resetAt: now + 24 * 60 * 60 * 1000 });
+    return { allowed: true, remaining: 4 };
+  }
+
+  if (entry.count >= 5) {
+    const hoursLeft = Math.ceil((entry.resetAt - now) / (60 * 60 * 1000));
+    return { allowed: false, remaining: 0, hoursLeft };
+  }
+
+  entry.count += 1;
+  return { allowed: true, remaining: 5 - entry.count };
+}
+
+// Clean up expired entries every hour
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, entry] of searchCounts) {
+    if (now > entry.resetAt) searchCounts.delete(ip);
+  }
+}, 60 * 60 * 1000);
+
+// =============================================
 // API: Find influencers
 // =============================================
 app.post('/api/influencers', async (req, res) => {
@@ -167,7 +198,7 @@ app.post('/api/influencers', async (req, res) => {
   if (!niche) return res.status(400).json({ error: 'Niche is required' });
 
   try {
-    // Check cache
+    // Check cache first (doesn't count against rate limit)
     const cached = await getCachedNiche(niche);
     if (cached) {
       console.log(`Cache hit: ${niche}`);
@@ -177,6 +208,16 @@ app.post('/api/influencers', async (req, res) => {
         fromCache: true,
       });
     }
+
+    // Rate limit: 5 new searches per day per IP (cached results are free)
+    const clientIp = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip;
+    const rateCheck = checkRateLimit(clientIp);
+    if (!rateCheck.allowed) {
+      return res.status(429).json({
+        error: `Daily search limit reached (5 per day). Try again in ~${rateCheck.hoursLeft} hours. Tip: previously searched niches load instantly from cache.`,
+      });
+    }
+    console.log(`Rate limit: ${rateCheck.remaining} searches remaining for ${clientIp}`);
 
     let allPostsFromSearch = null; // May be populated by post-search fallback
     console.log(`Cache miss: ${niche}. Expanding keywords...`);
@@ -321,28 +362,14 @@ app.post('/api/influencers', async (req, res) => {
       .sort((a, b) => b.followers - a.followers)
       .slice(0, 20);
 
-    // Step 2: Scrape posts from top profiles
-    // If we already got posts from the post-search fallback, use those
-    const profileUrls = sorted.slice(0, 10).map(p => p.profileUrl).filter(Boolean);
-
+    // Step 2: Use post data from the post-search fallback (no extra API call)
+    // If profile search worked (not post-search), we do a single cheap post search
     let allPosts = [];
-    let postResults = allPostsFromSearch; // May already have posts from fallback
 
-    if (!postResults && profileUrls.length > 0) {
-      try {
-        postResults = await runApifyActor('harvestapi~linkedin-profile-posts', {
-          profiles: profileUrls,
-          scrapePostedLimit: '3months',
-          takePages: 1,
-        }, 0.20);
-      } catch (e) {
-        console.log('Post scraping failed:', e.message);
-        postResults = [];
-      }
-    }
-
-    if (postResults && postResults.length > 0) {
-      allPosts = postResults
+    if (allPostsFromSearch && allPostsFromSearch.length > 0) {
+      // Already have posts from the fallback strategy — use them directly
+      console.log(`Using ${allPostsFromSearch.length} posts from post-search fallback`);
+      allPosts = allPostsFromSearch
         .filter(p => p.text || p.postText || p.content)
         .map(p => ({
           authorName: p.authorName || p.author?.name || '',
@@ -357,6 +384,37 @@ app.post('/api/influencers', async (req, res) => {
         .map(p => ({ ...p, engagement: p.likes + p.comments * 3 + p.reposts * 2 }))
         .sort((a, b) => b.engagement - a.engagement)
         .slice(0, 50);
+    } else if (sorted.length > 0) {
+      // Profile search worked but we have no posts yet — do one cheap post search
+      console.log('Fetching posts via post-search for the niche...');
+      try {
+        const postSearchResults = await runApifyActor('harvestapi~linkedin-post-search', {
+          search: searchKeywords,
+          takePages: 1,
+          startPage: 1,
+          sortBy: 'relevance',
+        }, 0.15);
+
+        if (postSearchResults && postSearchResults.length > 0) {
+          allPosts = postSearchResults
+            .filter(p => p.text || p.postText || p.content)
+            .map(p => ({
+              authorName: p.authorName || p.author?.name || '',
+              authorUrl: p.authorProfileUrl || p.author?.linkedinUrl || p.author?.url || '',
+              text: (p.text || p.postText || p.content || '').slice(0, 500),
+              likes: parseInt(p.likesCount || p.engagement?.likes || p.reactions || p.numLikes || 0),
+              comments: parseInt(p.commentsCount || p.engagement?.comments || p.numComments || 0),
+              reposts: parseInt(p.repostsCount || p.engagement?.shares || p.numReposts || 0),
+              postUrl: p.postUrl || p.linkedinUrl || p.url || '',
+              postedAt: p.postedAt?.date || p.postedAt || p.publishedAt || '',
+            }))
+            .map(p => ({ ...p, engagement: p.likes + p.comments * 3 + p.reposts * 2 }))
+            .sort((a, b) => b.engagement - a.engagement)
+            .slice(0, 50);
+        }
+      } catch (e) {
+        console.log('Post search for content failed:', e.message);
+      }
     }
 
     // Save to cache
