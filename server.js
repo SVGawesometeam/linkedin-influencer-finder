@@ -194,14 +194,16 @@ setInterval(() => {
 // API: Find influencers
 // =============================================
 app.post('/api/influencers', async (req, res) => {
-  const { niche } = req.body;
+  const { niche, role, goal } = req.body;
   if (!niche) return res.status(400).json({ error: 'Niche is required' });
 
   try {
     // Check cache first (doesn't count against rate limit)
-    const cached = await getCachedNiche(niche);
+    // Cache key includes role+goal so different angles get different results
+    const cacheKey = [niche, role, goal].filter(Boolean).join('|');
+    const cached = await getCachedNiche(cacheKey);
     if (cached) {
-      console.log(`Cache hit: ${niche}`);
+      console.log(`Cache hit: ${cacheKey}`);
       return res.json({
         profiles: JSON.parse(cached.profiles),
         posts: JSON.parse(cached.posts),
@@ -221,12 +223,20 @@ app.post('/api/influencers', async (req, res) => {
 
     console.log(`Cache miss: ${niche}. Expanding keywords...`);
 
-    // Step 0: Use Claude to generate smart search keywords
+    // Step 0: Use Claude to generate smart search keywords using ALL user inputs
     let searchKeywords = niche;
+    const context = [
+      `Niche: ${niche}`,
+      role ? `User's role: ${role}` : '',
+      goal ? `User wants to be known for: ${goal}` : '',
+    ].filter(Boolean).join('\n');
+
     try {
       const kwData = await callAnthropic(
-        `You help optimize LinkedIn post search queries. Given a niche, return 1-3 keyword variations that would find the most viral/engaging LinkedIn posts in that space. Keep them short (2-4 words). Return ONLY a JSON array of strings.`,
-        `Niche: ${niche}\n\nGenerate 1-3 LinkedIn post search keyword variations.`,
+        `You help optimize LinkedIn post search queries. Given a niche (and optionally a user's role and goals), return 1-3 keyword variations that would find the most relevant, viral LinkedIn posts in that specific intersection. The keywords should be specific to the user's angle, not generic. Keep them short (2-5 words). Return ONLY a JSON array of strings.
+
+Example: if niche is "marketing" and goal is "AI automation specialist", return keywords like ["AI marketing automation", "marketing AI tools", "automated marketing strategy"] — NOT generic keywords like "digital marketing thought leader".`,
+        `${context}\n\nGenerate 1-3 specific LinkedIn post search keywords that match this exact angle.`,
         500
       );
       const kwText = kwData.content[0].text.replace(/```json?\s*/gi, '').replace(/```/g, '').trim();
@@ -369,7 +379,7 @@ app.post('/api/influencers', async (req, res) => {
       .slice(0, 50);
 
     // Save to cache
-    await saveNicheCache(niche, sorted, allPosts);
+    await saveNicheCache(cacheKey, sorted, allPosts);
 
     res.json({ profiles: sorted, posts: allPosts, fromCache: false });
 
