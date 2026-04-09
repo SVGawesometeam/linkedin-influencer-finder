@@ -315,7 +315,7 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   <!-- Results -->
   <div id="results" style="display:none">
 
-    <h2 class="section-title">Top Influencers <span class="cache-badge" id="cacheBadge" style="display:none">From cache</span></h2>
+    <h2 class="section-title">Top Influencers</h2>
     <p class="section-sub">Sorted by post engagement. Real LinkedIn data scraped live.</p>
     <div class="influencer-grid" id="influencerGrid"></div>
 
@@ -435,12 +435,6 @@ async function findInfluencers() {
     const data = await res.json();
     currentProfiles = data.profiles || [];
     currentPosts = data.posts || [];
-
-    if (data.fromCache) {
-      document.getElementById('cacheBadge').style.display = 'inline-block';
-    } else {
-      document.getElementById('cacheBadge').style.display = 'none';
-    }
 
     renderProfiles();
     renderPosts();

@@ -199,8 +199,9 @@ app.post('/api/influencers', async (req, res) => {
 
   try {
     // Check cache first (doesn't count against rate limit)
-    // Cache key includes role+goal so different angles get different results
-    const cacheKey = [niche, role, goal].filter(Boolean).join('|');
+    // Cache key includes role+goal + version so algorithm changes invalidate old results
+    const CACHE_VERSION = 'v2';
+    const cacheKey = [CACHE_VERSION, niche, role, goal].filter(Boolean).join('|');
     const cached = await getCachedNiche(cacheKey);
     if (cached) {
       console.log(`Cache hit: ${cacheKey}`);
@@ -414,8 +415,8 @@ WRONG for Example 1: ["content creation strategy", "social media content", "cont
         postedAt: p.postedAt?.date || p.postedAt || p.publishedAt || '',
       }))
       .map(p => ({ ...p, engagement: p.likes + p.comments * 3 + p.reposts * 2 }))
-      // Filter: only show posts with real engagement (min 50 likes OR 15 comments OR 5 reposts)
-      .filter(p => p.likes >= 50 || p.comments >= 15 || p.reposts >= 5)
+      // Filter: only show posts with strong engagement
+      .filter(p => p.likes >= 100 || p.comments >= 30 || p.reposts >= 10)
       .sort((a, b) => b.engagement - a.engagement)
       .slice(0, 5);
 
