@@ -243,6 +243,7 @@ app.post('/api/influencers', async (req, res) => {
     // Step 1: Search profiles via harvestapi
     // Actor input fields (from JSON tab): searchQuery, maxItems, autoQuerySegmentation
     // CRITICAL: Pay-per-event actors need maxTotalChargeUsd (set in runApifyActor)
+    // Cost: search page $0.10 + 25 profiles × $0.004 = $0.20 + margin
     const searchInput = {
       searchQuery: searchKeywords,
       maxItems: 25,
@@ -251,8 +252,7 @@ app.post('/api/influencers', async (req, res) => {
 
     let searchResults;
     try {
-      // Budget: $0.15 (actor start $0.02 + 1 search page $0.10 + margin)
-      searchResults = await runApifyActor('harvestapi~linkedin-profile-search', searchInput, 0.15);
+      searchResults = await runApifyActor('harvestapi~linkedin-profile-search', searchInput, 0.25);
       console.log(`harvestapi returned ${searchResults ? searchResults.length : 0} profiles`);
       if (searchResults && searchResults.length > 0) {
         console.log('First result keys:', Object.keys(searchResults[0]).join(', '));
@@ -271,9 +271,9 @@ app.post('/api/influencers', async (req, res) => {
       try {
         const postSearchResults = await runApifyActor('harvestapi~linkedin-post-search', {
           searchQuery: searchKeywords,
-          maxItems: 50,
+          maxPosts: 50,
           sortBy: 'relevance',
-        }, 0.15);
+        }, 0.25);
 
         console.log(`Post search returned ${postSearchResults ? postSearchResults.length : 0} posts`);
 
@@ -321,25 +321,8 @@ app.post('/api/influencers', async (req, res) => {
       }
     }
 
-    // Fallback 2: Try powerai actor (most popular with 61K+ runs)
     if (!searchResults || searchResults.length === 0) {
-      console.log('Trying powerai actor...');
-      try {
-        searchResults = await runApifyActor('powerai~linkedin-peoples-search-scraper', {
-          keyword: searchKeywords,
-          maxResults: 25,
-        }, 0.15);
-        console.log(`powerai returned ${searchResults ? searchResults.length : 0} profiles`);
-        if (searchResults && searchResults.length > 0) {
-          console.log('First result keys:', Object.keys(searchResults[0]).join(', '));
-        }
-      } catch (e3) {
-        console.log('powerai actor also failed:', e3.message);
-      }
-    }
-
-    if (!searchResults || searchResults.length === 0) {
-      throw new Error('No profiles found. All search actors returned 0 results. Please check your Apify account balance and try broader keywords.');
+      throw new Error('No profiles found. Try broader keywords like "marketing" or "sales".');
     }
 
     // Log first result structure for debugging
@@ -387,9 +370,9 @@ app.post('/api/influencers', async (req, res) => {
       try {
         const postSearchResults = await runApifyActor('harvestapi~linkedin-post-search', {
           searchQuery: searchKeywords,
-          maxItems: 50,
+          maxPosts: 50,
           sortBy: 'relevance',
-        }, 0.15);
+        }, 0.25);
 
         if (postSearchResults && postSearchResults.length > 0) {
           allPosts = postSearchResults
