@@ -464,22 +464,15 @@ function formatNum(n) {
 
 function renderProfiles() {
   const grid = document.getElementById('influencerGrid');
-  grid.innerHTML = currentProfiles.map((p, i) => {
-    const eng = p.totalEngagement || p.followers || 0;
-    const engText = eng > 0 ? formatNum(eng) + ' total engagement' : '';
-    const postsText = p.postCount ? p.postCount + ' post' + (p.postCount > 1 ? 's' : '') + ' found' : '';
-    const metaText = [engText, postsText].filter(Boolean).join(' · ');
-    return `
+  grid.innerHTML = currentProfiles.map((p, i) => `
     <div class="inf-card">
       <div>
         <div class="inf-name">${esc(p.name)}</div>
         <div class="inf-title">${esc(p.title).slice(0, 100)}</div>
       </div>
-      ${metaText ? `<div class="inf-followers">${metaText}</div>` : ''}
       <a class="inf-link" href="${esc(p.profileUrl)}" target="_blank" rel="noopener">View profile &rarr;</a>
     </div>
-  `;
-  }).join('');
+  `).join('');
 }
 
 function renderPosts() {

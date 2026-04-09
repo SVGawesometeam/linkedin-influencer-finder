@@ -209,7 +209,7 @@ app.post('/api/influencers', async (req, res) => {
   try {
     // Check cache first (doesn't count against rate limit)
     // Cache key includes role+goal + version so algorithm changes invalidate old results
-    const CACHE_VERSION = 'v3';
+    const CACHE_VERSION = 'v4';
     const cacheKey = [CACHE_VERSION, niche, role, goal].filter(Boolean).join('|');
     const cached = await getCachedNiche(cacheKey);
     if (cached) {
@@ -289,10 +289,18 @@ app.post('/api/influencers', async (req, res) => {
       throw new Error('We couldn\'t find influencers for this niche yet. Try broader terms like "marketing", "sales", or "leadership" — or describe your topic differently.');
     }
 
+    // Filter out hiring/job posts — they clutter results and aren't useful for content ideas
+    const hiringWords = /\b(hiring|we're looking for|job opening|job opportunity|work from home job|urgent\s*hiring|apply now|join our team|remote job|we are hiring)\b/i;
+    postSearchResults = postSearchResults.filter(p => {
+      if (!p || typeof p !== 'object') return false;
+      const text = String(p.text || p.postText || p.content || '');
+      return !hiringWords.test(text);
+    });
+    console.log(`After filtering hiring posts: ${postSearchResults.length} posts remain`);
+
     // Extract unique authors and aggregate their engagement
     const authorMap = new Map();
     for (const post of postSearchResults) {
-      if (!post || typeof post !== 'object') continue;
       const author = post.author || {};
       const authorKey = author.publicIdentifier || author.universalName || author.name;
       if (!authorKey) continue;
