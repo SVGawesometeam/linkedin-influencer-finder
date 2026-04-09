@@ -85,7 +85,9 @@ async function runApifyActor(actorId, input) {
     }
 
     if (status === 'FAILED' || status === 'ABORTED' || status === 'TIMED-OUT') {
-      throw new Error(`Apify run ${status}`);
+      const errorInfo = statusData.data.statusMessage || status;
+      console.error('Apify run failed:', errorInfo);
+      throw new Error(`Apify run ${status}: ${errorInfo}`);
     }
   }
 
@@ -176,24 +178,32 @@ app.post('/api/influencers', async (req, res) => {
     console.log(`Cache miss: ${niche}. Scraping...`);
 
     // Step 1: Search profiles
-    const searchResults = await runApifyActor('harvestapi~linkedin-profile-search', {
-      searchUrl: `https://www.linkedin.com/search/results/people/?keywords=${encodeURIComponent(niche + ' influencer creator')}&origin=GLOBAL_SEARCH_HEADER`,
-      maxProfiles: 60,
-      scrapeProfiles: true,
-    });
+    const searchInput = {
+      searchUrl: `https://www.linkedin.com/search/results/people/?keywords=${encodeURIComponent(niche)}&origin=GLOBAL_SEARCH_HEADER`,
+      maxProfiles: 50,
+    };
+    console.log('Apify search input:', JSON.stringify(searchInput));
+
+    const searchResults = await runApifyActor('harvestapi~linkedin-profile-search', searchInput);
+    console.log(`Apify returned ${searchResults ? searchResults.length : 0} profiles`);
 
     if (!searchResults || searchResults.length === 0) {
       throw new Error('No profiles found. Try different keywords.');
     }
 
+    // Log first result structure for debugging
+    if (searchResults[0]) {
+      console.log('Sample profile keys:', Object.keys(searchResults[0]).join(', '));
+    }
+
     const sorted = searchResults
-      .filter(p => p.fullName && p.profileUrl)
+      .filter(p => (p.fullName || p.name || p.firstName) && (p.profileUrl || p.url || p.linkedinUrl))
       .map(p => ({
-        name: p.fullName || '',
-        title: p.headline || p.title || '',
-        profileUrl: p.profileUrl || p.url || '',
-        followers: parseInt(p.followersCount || p.followers || 0),
-        location: p.location || '',
+        name: p.fullName || p.name || [p.firstName, p.lastName].filter(Boolean).join(' ') || '',
+        title: p.headline || p.title || p.occupation || '',
+        profileUrl: p.profileUrl || p.url || p.linkedinUrl || '',
+        followers: parseInt(p.followersCount || p.followers || p.followerCount || 0),
+        location: p.location || p.geo || '',
       }))
       .sort((a, b) => b.followers - a.followers)
       .slice(0, 20);
