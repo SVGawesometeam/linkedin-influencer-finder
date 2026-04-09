@@ -270,13 +270,20 @@ app.post('/api/influencers', async (req, res) => {
       postSearchResults = [];
     }
 
-    if (!postSearchResults || postSearchResults.length === 0) {
+    // Ensure we have a valid array
+    if (!Array.isArray(postSearchResults)) {
+      console.log('Post search returned non-array:', typeof postSearchResults, JSON.stringify(postSearchResults).slice(0, 300));
+      postSearchResults = [];
+    }
+
+    if (postSearchResults.length === 0) {
       throw new Error('We couldn\'t find influencers for this niche yet. Try broader terms like "marketing", "sales", or "leadership" — or describe your topic differently.');
     }
 
     // Extract unique authors and aggregate their engagement
     const authorMap = new Map();
     for (const post of postSearchResults) {
+      if (!post || typeof post !== 'object') continue;
       const author = post.author || {};
       const authorKey = author.publicIdentifier || author.universalName || author.name;
       if (!authorKey) continue;
@@ -293,8 +300,8 @@ app.post('/api/influencers', async (req, res) => {
       }
 
       const a = authorMap.get(authorKey);
-      const eng = post.engagement || {};
-      const postEng = (eng.likes || 0) + (eng.comments || 0) * 3 + (eng.shares || 0) * 2;
+      const eng = (post.engagement && typeof post.engagement === 'object') ? post.engagement : {};
+      const postEng = (Number(eng.likes) || 0) + (Number(eng.comments) || 0) * 3 + (Number(eng.shares) || 0) * 2;
       a.totalEngagement += postEng;
       a.postCount += 1;
       a.avgEngagement = Math.round(a.totalEngagement / a.postCount);
@@ -308,17 +315,21 @@ app.post('/api/influencers', async (req, res) => {
 
     // Format posts for display — ONLY high engagement posts
     const allPosts = postSearchResults
-      .filter(p => p.text || p.postText || p.content)
-      .map(p => ({
-        authorName: p.authorName || p.author?.name || '',
-        authorUrl: p.authorProfileUrl || p.author?.linkedinUrl || p.author?.url || '',
-        text: (p.text || p.postText || p.content || '').slice(0, 500),
-        likes: parseInt(p.likesCount || p.engagement?.likes || p.reactions || p.numLikes || 0),
-        comments: parseInt(p.commentsCount || p.engagement?.comments || p.numComments || 0),
-        reposts: parseInt(p.repostsCount || p.engagement?.shares || p.numReposts || 0),
-        postUrl: p.postUrl || p.linkedinUrl || p.url || '',
-        postedAt: p.postedAt?.date || p.postedAt || p.publishedAt || '',
-      }))
+      .filter(p => p && (p.text || p.postText || p.content))
+      .map(p => {
+        const eng = (p.engagement && typeof p.engagement === 'object') ? p.engagement : {};
+        const author = (p.author && typeof p.author === 'object') ? p.author : {};
+        return {
+          authorName: p.authorName || author.name || '',
+          authorUrl: p.authorProfileUrl || author.linkedinUrl || author.url || '',
+          text: String(p.text || p.postText || p.content || '').slice(0, 500),
+          likes: Number(p.likesCount || eng.likes || p.reactions || p.numLikes) || 0,
+          comments: Number(p.commentsCount || eng.comments || p.numComments) || 0,
+          reposts: Number(p.repostsCount || eng.shares || p.numReposts) || 0,
+          postUrl: p.postUrl || p.linkedinUrl || p.url || '',
+          postedAt: (p.postedAt && p.postedAt.date) || p.postedAt || p.publishedAt || '',
+        };
+      })
       .map(p => ({ ...p, engagement: p.likes + p.comments * 3 + p.reposts * 2 }))
       // Filter: only show posts with strong engagement
       .filter(p => p.likes >= 100 || p.comments >= 30 || p.reposts >= 10)
@@ -331,12 +342,16 @@ app.post('/api/influencers', async (req, res) => {
     res.json({ profiles: sorted, posts: allPosts, fromCache: false });
 
   } catch (err) {
-    console.error('Influencer error:', err.message);
-    // Show user-friendly error — never expose internal/technical details
-    let userMessage = err.message;
-    if (userMessage.includes('Apify') || userMessage.includes('API') || userMessage.includes('token') || userMessage.includes('ANTHROPIC')) {
-      userMessage = 'Something went wrong on our end. Please try again in a moment, or try different keywords.';
-    }
+    console.error('Influencer error:', err.message, err.stack);
+    // Only show errors we explicitly wrote for users. Everything else is technical.
+    const safePrefixes = [
+      'We couldn\'t find influencers',
+      'Daily search limit reached',
+    ];
+    const isSafe = safePrefixes.some(prefix => (err.message || '').startsWith(prefix));
+    const userMessage = isSafe
+      ? err.message
+      : 'Something went wrong on our end. Please try again in a moment, or try different keywords.';
     res.status(500).json({ error: userMessage });
   }
 });
