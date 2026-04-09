@@ -224,7 +224,9 @@ app.post('/api/influencers', async (req, res) => {
     console.log(`Cache miss: ${niche}. Expanding keywords...`);
 
     // Step 0: Use Claude to generate smart search keywords using ALL user inputs
-    let searchKeywords = niche;
+    // CRITICAL: If the user provides a goal like "video editing", the keywords
+    // MUST be about video editing — not generic niche terms
+    let allKeywords = [niche];
     const context = [
       `Niche: ${niche}`,
       role ? `User's role: ${role}` : '',
@@ -233,16 +235,26 @@ app.post('/api/influencers', async (req, res) => {
 
     try {
       const kwData = await callAnthropic(
-        `You help optimize LinkedIn post search queries. Given a niche (and optionally a user's role and goals), return 1-3 keyword variations that would find the most relevant, viral LinkedIn posts in that specific intersection. The keywords should be specific to the user's angle, not generic. Keep them short (2-5 words). Return ONLY a JSON array of strings.
+        `You generate LinkedIn post search keywords. Given a user's niche, role, and goals, return 2-3 keyword phrases that will find LinkedIn posts from influencers in that EXACT specialization.
 
-Example: if niche is "marketing" and goal is "AI automation specialist", return keywords like ["AI marketing automation", "marketing AI tools", "automated marketing strategy"] — NOT generic keywords like "digital marketing thought leader".`,
-        `${context}\n\nGenerate 1-3 specific LinkedIn post search keywords that match this exact angle.`,
+CRITICAL RULES:
+- If a goal/role is provided, it is MORE IMPORTANT than the niche. The goal defines the specific angle.
+- Keywords must be about the SPECIFIC topic, not the broad niche.
+- Each keyword should be 2-4 words.
+- Return ONLY a JSON array of strings.
+
+Example 1: niche="content creation", goal="Lead Video Editor" → ["video editing tips", "video editor LinkedIn", "video content creation"]
+Example 2: niche="marketing", goal="AI automation specialist" → ["AI marketing automation", "marketing AI tools", "automated marketing"]
+Example 3: niche="fitness", role="Personal Trainer", goal="online coaching" → ["online fitness coaching", "personal trainer tips", "virtual training business"]
+
+WRONG for Example 1: ["content creation strategy", "social media content", "content marketing"] — these ignore the video editing goal entirely.`,
+        `${context}\n\nGenerate 2-3 specific keyword phrases. Remember: the goal/role defines the specialization.`,
         500
       );
       const kwText = kwData.content[0].text.replace(/```json?\s*/gi, '').replace(/```/g, '').trim();
       const keywords = JSON.parse(kwText);
       if (Array.isArray(keywords) && keywords.length > 0) {
-        searchKeywords = keywords[0];
+        allKeywords = keywords;
         console.log('Expanded keywords:', keywords);
       }
     } catch (e) {
@@ -251,24 +263,22 @@ Example: if niche is "marketing" and goal is "AI automation specialist", return 
 
     // =============================================================
     // STRATEGY: Search POSTS first, then extract top authors
-    // This is better for finding influencers because:
-    // 1. We get engagement data directly (likes, comments, shares)
-    // 2. Only active posters appear (inactive profiles are filtered out)
-    // 3. We get post content for the "post ideas" feature for free
-    // 4. One API call gives us both profiles AND posts
+    // Use ALL keywords (not just the first) to cast a focused net
     // =============================================================
 
-    console.log(`Searching posts for: "${searchKeywords}"`);
+    console.log(`Searching posts for: ${JSON.stringify(allKeywords)}`);
     let postSearchResults = [];
     try {
       postSearchResults = await runApifyActor('harvestapi~linkedin-post-search', {
-        searchQueries: [searchKeywords],
+        searchQueries: allKeywords,
         maxPosts: 100,
       }, 0.25);
       console.log(`Post search returned ${postSearchResults ? postSearchResults.length : 0} posts`);
       if (postSearchResults && postSearchResults.length > 0) {
         console.log('First post keys:', Object.keys(postSearchResults[0]).join(', '));
-        console.log('First post sample:', JSON.stringify(postSearchResults[0]).slice(0, 500));
+        // Log author object structure to help debug follower/image fields
+        console.log('First post author:', JSON.stringify(postSearchResults[0].author || {}).slice(0, 600));
+        console.log('First post engagement:', JSON.stringify(postSearchResults[0].engagement || {}));
       }
     } catch (e) {
       console.log('Post search failed:', e.message);
@@ -280,6 +290,7 @@ Example: if niche is "marketing" and goal is "AI automation specialist", return 
     }
 
     // Extract unique authors and aggregate their engagement
+    // Also try to pull followers + profile image from post author data
     const authorMap = new Map();
     for (const post of postSearchResults) {
       const author = post.author || {};
@@ -287,12 +298,24 @@ Example: if niche is "marketing" and goal is "AI automation specialist", return 
       if (!authorKey) continue;
 
       if (!authorMap.has(authorKey)) {
+        // Try every possible field name for follower count from post author data
+        const followersFromPost = parseInt(
+          author.followerCount || author.followersCount || author.followers ||
+          author.numFollowers || author.connectionCount || 0
+        );
+
+        // Try every possible field name for profile image
+        const profileImage =
+          author.profilePicture || author.profileImageUrl || author.profileImage ||
+          author.image || author.avatar || author.pictureUrl ||
+          author.profilePictureUrl || '';
+
         authorMap.set(authorKey, {
           name: author.name || '',
-          title: author.info || author.position || '',
-          profileUrl: author.linkedinUrl || (author.publicIdentifier ? `https://www.linkedin.com/in/${author.publicIdentifier}` : ''),
-          followers: 0,
-          location: '',
+          title: author.info || author.position || author.headline || author.description || '',
+          profileUrl: author.linkedinUrl || author.url || (author.publicIdentifier ? `https://www.linkedin.com/in/${author.publicIdentifier}` : ''),
+          followers: followersFromPost,
+          profileImage: profileImage,
           totalEngagement: 0,
           postCount: 0,
           avgEngagement: 0,
@@ -315,53 +338,69 @@ Example: if niche is "marketing" and goal is "AI automation specialist", return 
 
     console.log(`Found ${sorted.length} unique authors from ${postSearchResults.length} posts`);
 
-    // Step 2: Get real follower counts for top authors
-    // Use profile search in Full mode to enrich with follower data
-    const profileUrls = sorted.map(a => a.profileUrl).filter(Boolean);
+    // Step 2: Enrich profiles with follower counts (if not already from post data)
+    // Only enrich profiles that don't have follower data from the post search
+    const needsEnrichment = sorted.filter(a => !a.followers || a.followers === 0);
+    const profileUrls = needsEnrichment.map(a => a.profileUrl).filter(Boolean);
+
     if (profileUrls.length > 0) {
       try {
         console.log(`Enriching ${profileUrls.length} profiles with follower counts...`);
+        // Try with startUrls format (array of objects) — most common in Apify actors
         const profileData = await runApifyActor('harvestapi~linkedin-profile-scraper', {
-          profileUrls: profileUrls,
-        }, 0.15); // ~$0.004 per profile × 20 = $0.08
+          startUrls: profileUrls.map(url => ({ url })),
+        }, 0.15);
 
         if (profileData && profileData.length > 0) {
-          console.log('Profile enrichment keys:', Object.keys(profileData[0]).join(', '));
-          // Build a lookup map by profile URL or publicIdentifier
-          const followerMap = new Map();
+          console.log('Profile enrichment returned:', profileData.length, 'results');
+          console.log('Profile enrichment first result keys:', Object.keys(profileData[0]).join(', '));
+          console.log('Profile enrichment sample:', JSON.stringify(profileData[0]).slice(0, 500));
+
+          // Build a lookup map — try every possible field for URL and followers
+          const enrichMap = new Map();
           for (const p of profileData) {
-            const url = p.linkedinUrl || p.profileUrl || p.url || '';
-            const id = p.publicIdentifier || '';
-            const followers = parseInt(p.followerCount || p.followersCount || p.followers || 0);
-            if (url) followerMap.set(url, followers);
-            if (id) followerMap.set(id, followers);
+            const url = p.linkedinUrl || p.profileUrl || p.url || p.linkedInUrl || '';
+            const id = p.publicIdentifier || p.username || '';
+            const followers = parseInt(
+              p.followerCount || p.followersCount || p.followers ||
+              p.numFollowers || p.connectionCount || 0
+            );
+            const image = p.profilePicture || p.profileImageUrl || p.profilePictureUrl ||
+              p.avatar || p.image || p.pictureUrl || '';
+
+            if (url) enrichMap.set(url, { followers, image });
+            if (id) enrichMap.set(id, { followers, image });
             if (url.includes('/in/')) {
               const slug = url.split('/in/')[1]?.replace(/\/$/, '');
-              if (slug) followerMap.set(slug, followers);
+              if (slug) enrichMap.set(slug, { followers, image });
             }
           }
 
-          // Merge follower counts into sorted authors
+          // Merge into sorted authors
           sorted = sorted.map(a => {
-            let followers = 0;
-            // Try matching by URL, publicIdentifier, or slug
-            if (followerMap.has(a.profileUrl)) followers = followerMap.get(a.profileUrl);
-            else {
+            let enriched = enrichMap.get(a.profileUrl);
+            if (!enriched) {
               const slug = a.profileUrl.split('/in/')[1]?.replace(/\/$/, '');
-              if (slug && followerMap.has(slug)) followers = followerMap.get(slug);
+              if (slug) enriched = enrichMap.get(slug);
             }
-            return { ...a, followers };
+            if (enriched) {
+              return {
+                ...a,
+                followers: enriched.followers || a.followers,
+                profileImage: enriched.image || a.profileImage,
+              };
+            }
+            return a;
           });
           console.log('Follower enrichment complete');
         }
       } catch (e) {
         console.log('Profile enrichment failed (non-critical):', e.message);
-        // Non-critical — we still have engagement data, just no follower counts
-        sorted = sorted.map(a => ({ ...a, followers: 0 }));
+        // Non-critical — we still have engagement data
       }
     }
 
-    // Format posts for display
+    // Format posts for display — ONLY high engagement posts
     const allPosts = postSearchResults
       .filter(p => p.text || p.postText || p.content)
       .map(p => ({
@@ -375,8 +414,10 @@ Example: if niche is "marketing" and goal is "AI automation specialist", return 
         postedAt: p.postedAt?.date || p.postedAt || p.publishedAt || '',
       }))
       .map(p => ({ ...p, engagement: p.likes + p.comments * 3 + p.reposts * 2 }))
+      // Filter: only show posts with real engagement (min 50 likes OR 15 comments OR 5 reposts)
+      .filter(p => p.likes >= 50 || p.comments >= 15 || p.reposts >= 5)
       .sort((a, b) => b.engagement - a.engagement)
-      .slice(0, 50);
+      .slice(0, 5);
 
     // Save to cache
     await saveNicheCache(cacheKey, sorted, allPosts);
@@ -400,7 +441,7 @@ Example: if niche is "marketing" and goal is "AI automation specialist", return 
 app.post('/api/post-ideas', async (req, res) => {
   const { niche, role, goal, topPosts, profiles } = req.body;
 
-  const topPostsSummary = (topPosts || []).slice(0, 7).map((p, i) =>
+  const topPostsSummary = (topPosts || []).slice(0, 5).map((p, i) =>
     `Post ${i + 1} (${p.likes} likes, ${p.comments} comments, ${p.reposts} reposts) by ${p.authorName}:\n"${p.text.slice(0, 300)}"\nURL: ${p.postUrl}`
   ).join('\n\n');
 

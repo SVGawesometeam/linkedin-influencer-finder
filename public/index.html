@@ -469,19 +469,28 @@ function formatNum(n) {
 
 function renderProfiles() {
   const grid = document.getElementById('influencerGrid');
-  grid.innerHTML = currentProfiles.map((p, i) => `
+  grid.innerHTML = currentProfiles.map((p, i) => {
+    const hasImage = p.profileImage && p.profileImage.startsWith('http');
+    const avatarHtml = hasImage
+      ? `<img src="${esc(p.profileImage)}" alt="" style="width:42px;height:42px;border-radius:50%;object-fit:cover;flex-shrink:0">`
+      : '';
+    const followersText = p.followers && p.followers > 0 ? formatNum(p.followers) + ' followers' : '';
+    const postsText = p.postCount ? p.postCount + ' post' + (p.postCount > 1 ? 's' : '') + ' found' : '';
+    const metaText = [followersText, postsText].filter(Boolean).join(' · ');
+    return `
     <div class="inf-card">
       <div class="inf-header">
-        <div class="inf-avatar" style="background:${COLORS[i % COLORS.length]}">${getInitials(p.name)}</div>
+        ${avatarHtml}
         <div>
           <div class="inf-name">${esc(p.name)}</div>
           <div class="inf-title">${esc(p.title).slice(0, 80)}</div>
         </div>
       </div>
-      <div class="inf-followers">${p.followers ? formatNum(p.followers) + ' followers' : ''}${p.followers && p.postCount ? ' · ' : ''}${p.postCount ? p.postCount + ' post' + (p.postCount > 1 ? 's' : '') + ' found' : ''}</div>
+      ${metaText ? `<div class="inf-followers">${metaText}</div>` : ''}
       <a class="inf-link" href="${esc(p.profileUrl)}" target="_blank" rel="noopener">View profile &rarr;</a>
     </div>
-  `).join('');
+  `;
+  }).join('');
 }
 
 function renderPosts() {
@@ -490,7 +499,7 @@ function renderPosts() {
     list.innerHTML = '<div class="card" style="text-align:center;color:var(--muted)">No posts scraped yet. Try a different niche or broader keywords.</div>';
     return;
   }
-  list.innerHTML = currentPosts.slice(0, 7).map(p => `
+  list.innerHTML = currentPosts.slice(0, 5).map(p => `
     <div class="post-card">
       <div class="post-meta">
         <span class="post-author">${esc(p.authorName)}</span>
@@ -521,7 +530,7 @@ async function generateIdeas() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         niche, role, goal,
-        topPosts: currentPosts.slice(0, 7),
+        topPosts: currentPosts.slice(0, 5),
         profiles: currentProfiles.slice(0, 10),
       }),
     });
