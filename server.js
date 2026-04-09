@@ -40,13 +40,16 @@ async function callAnthropic(systemPrompt, userMessage, maxTokens = 4000) {
 // =============================================
 // Helper: Apify actor runner
 // =============================================
-async function runApifyActor(actorId, input) {
+async function runApifyActor(actorId, input, maxChargeUsd = 1.0) {
   const token = process.env.APIFY_API_TOKEN;
   if (!token) throw new Error('APIFY_API_TOKEN not configured');
 
-  const startRes = await fetch(
-    `https://api.apify.com/v2/acts/${actorId}/runs?token=${token}`,
-    {
+  // Pay-per-event actors REQUIRE maxTotalChargeUsd to be set, otherwise
+  // the actor has no spending authority and silently returns 0 results
+  const url = `https://api.apify.com/v2/acts/${actorId}/runs?token=${token}&maxTotalChargeUsd=${maxChargeUsd}`;
+  console.log(`Starting Apify actor: ${actorId} (budget: $${maxChargeUsd})`);
+
+  const startRes = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(input),
@@ -175,6 +178,7 @@ app.post('/api/influencers', async (req, res) => {
       });
     }
 
+    let allPostsFromSearch = null; // May be populated by post-search fallback
     console.log(`Cache miss: ${niche}. Expanding keywords...`);
 
     // Step 0.5: Use Claude to generate smart LinkedIn search keywords
@@ -196,12 +200,9 @@ app.post('/api/influencers', async (req, res) => {
     }
 
     // Step 1: Search profiles via harvestapi
-    // Field names from @harvestapi/scraper SDK:
-    //   search = fuzzy keyword search
-    //   title  = job title filter
-    //   takePages = number of search result pages (25 results/page)
-    //   startPage = first page (default 1)
-    //   mode = 'short' | 'full' (short = search results only, cheaper)
+    // The SDK uses: search (fuzzy keyword), title, location, page
+    // The Apify actor also needs: takePages, startPage
+    // CRITICAL: Pay-per-event actors need maxTotalChargeUsd (set in runApifyActor)
     const searchInput = {
       search: searchKeywords,
       takePages: 2,
@@ -211,33 +212,96 @@ app.post('/api/influencers', async (req, res) => {
 
     let searchResults;
     try {
-      searchResults = await runApifyActor('harvestapi~linkedin-profile-search', searchInput);
+      // Budget: $0.50 max (2 search pages @ $0.10 each + profiles)
+      searchResults = await runApifyActor('harvestapi~linkedin-profile-search', searchInput, 0.5);
       console.log(`harvestapi returned ${searchResults ? searchResults.length : 0} profiles`);
       if (searchResults && searchResults.length > 0) {
         console.log('First result keys:', Object.keys(searchResults[0]).join(', '));
         console.log('First result sample:', JSON.stringify(searchResults[0]).slice(0, 500));
       }
     } catch (e) {
-      console.log('harvestapi failed:', e.message, '— trying backup actor');
+      console.log('harvestapi profile-search failed:', e.message);
       searchResults = [];
     }
 
-    // Fallback: try a different actor if first one returns nothing
+    // Fallback Strategy: Search POSTS instead of profiles
+    // If profile search fails, search for viral posts in the niche
+    // and extract author info — this is actually better for finding influencers
     if (!searchResults || searchResults.length === 0) {
-      console.log('Trying backup actor: logical_scrapers~linkedin-people-search-scraper');
+      console.log('Profile search returned 0. Trying POST search approach...');
       try {
-        searchResults = await runApifyActor('logical_scrapers~linkedin-people-search-scraper', {
-          search_keywords: searchKeywords,
-          max_results: 50,
-        });
-        console.log(`logical_scrapers returned ${searchResults ? searchResults.length : 0} profiles`);
+        const postSearchResults = await runApifyActor('harvestapi~linkedin-post-search', {
+          search: searchKeywords,
+          takePages: 2,
+          startPage: 1,
+          sortBy: 'relevance',
+        }, 0.5);
+
+        console.log(`Post search returned ${postSearchResults ? postSearchResults.length : 0} posts`);
+
+        if (postSearchResults && postSearchResults.length > 0) {
+          console.log('First post keys:', Object.keys(postSearchResults[0]).join(', '));
+          console.log('First post sample:', JSON.stringify(postSearchResults[0]).slice(0, 500));
+
+          // Extract unique authors from posts as our "profiles"
+          const authorMap = new Map();
+          for (const post of postSearchResults) {
+            const author = post.author || {};
+            const authorKey = author.publicIdentifier || author.universalName || author.name;
+            if (!authorKey) continue;
+
+            if (!authorMap.has(authorKey)) {
+              authorMap.set(authorKey, {
+                name: author.name || '',
+                title: author.info || author.position || '',
+                profileUrl: author.linkedinUrl || (author.publicIdentifier ? `https://www.linkedin.com/in/${author.publicIdentifier}` : ''),
+                followers: 0,
+                location: '',
+                totalEngagement: 0,
+                postCount: 0,
+              });
+            }
+
+            const a = authorMap.get(authorKey);
+            const eng = post.engagement || {};
+            a.totalEngagement += (eng.likes || 0) + (eng.comments || 0) * 3 + (eng.shares || 0) * 2;
+            a.postCount += 1;
+          }
+
+          // Convert to profiles sorted by total engagement
+          searchResults = Array.from(authorMap.values())
+            .map(a => ({ ...a, followers: a.totalEngagement })) // Use engagement as proxy for influence
+            .sort((a, b) => b.followers - a.followers);
+
+          console.log(`Extracted ${searchResults.length} unique authors from posts`);
+
+          // Also save the posts directly for later use
+          allPostsFromSearch = postSearchResults;
+        }
       } catch (e2) {
-        console.log('Backup actor also failed:', e2.message);
+        console.log('Post search also failed:', e2.message);
+      }
+    }
+
+    // Fallback 2: Try powerai actor (most popular with 61K+ runs)
+    if (!searchResults || searchResults.length === 0) {
+      console.log('Trying powerai actor...');
+      try {
+        searchResults = await runApifyActor('powerai~linkedin-peoples-search-scraper', {
+          keyword: searchKeywords,
+          maxResults: 50,
+        }, 0.5);
+        console.log(`powerai returned ${searchResults ? searchResults.length : 0} profiles`);
+        if (searchResults && searchResults.length > 0) {
+          console.log('First result keys:', Object.keys(searchResults[0]).join(', '));
+        }
+      } catch (e3) {
+        console.log('powerai actor also failed:', e3.message);
       }
     }
 
     if (!searchResults || searchResults.length === 0) {
-      throw new Error('No profiles found. Try broader keywords like "marketing" instead of a very specific niche.');
+      throw new Error('No profiles found. All search actors returned 0 results. Please check your Apify account balance and try broader keywords.');
     }
 
     // Log first result structure for debugging
@@ -257,36 +321,42 @@ app.post('/api/influencers', async (req, res) => {
       .sort((a, b) => b.followers - a.followers)
       .slice(0, 20);
 
-    // Step 2: Scrape posts from top 10
-    // harvestapi~linkedin-profile-posts expects: profile (URL or public identifier)
-    // We run one call per profile with scrapePostedLimit to get recent posts
+    // Step 2: Scrape posts from top profiles
+    // If we already got posts from the post-search fallback, use those
     const profileUrls = sorted.slice(0, 10).map(p => p.profileUrl).filter(Boolean);
 
     let allPosts = [];
-    if (profileUrls.length > 0) {
-      const postResults = await runApifyActor('harvestapi~linkedin-profile-posts', {
-        profiles: profileUrls,
-        scrapePostedLimit: '3months',
-        takePages: 1,
-      });
+    let postResults = allPostsFromSearch; // May already have posts from fallback
 
-      if (postResults && postResults.length > 0) {
-        allPosts = postResults
-          .filter(p => p.text || p.postText || p.content)
-          .map(p => ({
-            authorName: p.authorName || p.author?.name || '',
-            authorUrl: p.authorProfileUrl || p.author?.linkedinUrl || p.author?.url || '',
-            text: (p.text || p.postText || p.content || '').slice(0, 500),
-            likes: parseInt(p.likesCount || p.engagement?.likes || p.reactions || p.numLikes || 0),
-            comments: parseInt(p.commentsCount || p.engagement?.comments || p.numComments || 0),
-            reposts: parseInt(p.repostsCount || p.engagement?.shares || p.numReposts || 0),
-            postUrl: p.postUrl || p.linkedinUrl || p.url || '',
-            postedAt: p.postedAt?.date || p.postedAt || p.publishedAt || '',
-          }))
-          .map(p => ({ ...p, engagement: p.likes + p.comments * 3 + p.reposts * 2 }))
-          .sort((a, b) => b.engagement - a.engagement)
-          .slice(0, 50);
+    if (!postResults && profileUrls.length > 0) {
+      try {
+        postResults = await runApifyActor('harvestapi~linkedin-profile-posts', {
+          profiles: profileUrls,
+          scrapePostedLimit: '3months',
+          takePages: 1,
+        }, 0.5);
+      } catch (e) {
+        console.log('Post scraping failed:', e.message);
+        postResults = [];
       }
+    }
+
+    if (postResults && postResults.length > 0) {
+      allPosts = postResults
+        .filter(p => p.text || p.postText || p.content)
+        .map(p => ({
+          authorName: p.authorName || p.author?.name || '',
+          authorUrl: p.authorProfileUrl || p.author?.linkedinUrl || p.author?.url || '',
+          text: (p.text || p.postText || p.content || '').slice(0, 500),
+          likes: parseInt(p.likesCount || p.engagement?.likes || p.reactions || p.numLikes || 0),
+          comments: parseInt(p.commentsCount || p.engagement?.comments || p.numComments || 0),
+          reposts: parseInt(p.repostsCount || p.engagement?.shares || p.numReposts || 0),
+          postUrl: p.postUrl || p.linkedinUrl || p.url || '',
+          postedAt: p.postedAt?.date || p.postedAt || p.publishedAt || '',
+        }))
+        .map(p => ({ ...p, engagement: p.likes + p.comments * 3 + p.reposts * 2 }))
+        .sort((a, b) => b.engagement - a.engagement)
+        .slice(0, 50);
     }
 
     // Save to cache
