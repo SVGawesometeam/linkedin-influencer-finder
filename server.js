@@ -175,11 +175,29 @@ app.post('/api/influencers', async (req, res) => {
       });
     }
 
-    console.log(`Cache miss: ${niche}. Scraping...`);
+    console.log(`Cache miss: ${niche}. Expanding keywords...`);
+
+    // Step 0.5: Use Claude to generate smart LinkedIn search keywords
+    let searchKeywords = niche;
+    try {
+      const kwData = await callAnthropic(
+        `You help optimize LinkedIn people search queries. Given a niche, return 1-3 search keyword variations that would find the most active LinkedIn creators and thought leaders in that space. Return ONLY a JSON array of strings, no explanation. Example: ["B2B SaaS marketing leader", "SaaS growth strategist", "B2B content creator marketing"]`,
+        `Niche: ${niche}\n\nGenerate 1-3 LinkedIn people search keyword variations to find top creators.`,
+        500
+      );
+      const kwText = kwData.content[0].text.replace(/```json?\s*/gi, '').replace(/```/g, '').trim();
+      const keywords = JSON.parse(kwText);
+      if (Array.isArray(keywords) && keywords.length > 0) {
+        searchKeywords = keywords[0]; // Use the best one for the main search
+        console.log('Expanded keywords:', keywords);
+      }
+    } catch (e) {
+      console.log('Keyword expansion failed, using original niche:', e.message);
+    }
 
     // Step 1: Search profiles
     const searchInput = {
-      searchUrl: `https://www.linkedin.com/search/results/people/?keywords=${encodeURIComponent(niche)}&origin=GLOBAL_SEARCH_HEADER`,
+      searchUrl: `https://www.linkedin.com/search/results/people/?keywords=${encodeURIComponent(searchKeywords)}&origin=GLOBAL_SEARCH_HEADER`,
       maxProfiles: 50,
     };
     console.log('Apify search input:', JSON.stringify(searchInput));
