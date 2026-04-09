@@ -456,15 +456,17 @@ function getInitials(name) {
 }
 
 function formatNum(n) {
+  n = Number(n) || 0;
   if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
   if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
-  return n.toString();
+  return String(n);
 }
 
 function renderProfiles() {
   const grid = document.getElementById('influencerGrid');
   grid.innerHTML = currentProfiles.map((p, i) => {
-    const engText = p.totalEngagement ? formatNum(p.totalEngagement) + ' total engagement' : '';
+    const eng = p.totalEngagement || p.followers || 0;
+    const engText = eng > 0 ? formatNum(eng) + ' total engagement' : '';
     const postsText = p.postCount ? p.postCount + ' post' + (p.postCount > 1 ? 's' : '') + ' found' : '';
     const metaText = [engText, postsText].filter(Boolean).join(' · ');
     return `
