@@ -5,6 +5,15 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.use(express.json({ limit: '200kb' }));
+
+// Prevent browser caching of HTML so deploys take effect immediately
+app.use((req, res, next) => {
+  if (req.path === '/' || req.path.endsWith('.html')) {
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  }
+  next();
+});
+
 app.use(express.static(path.join(__dirname, 'public')));
 
 // =============================================
