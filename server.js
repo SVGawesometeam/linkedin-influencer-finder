@@ -219,184 +219,112 @@ app.post('/api/influencers', async (req, res) => {
     }
     console.log(`Rate limit: ${rateCheck.remaining} searches remaining for ${clientIp}`);
 
-    let allPostsFromSearch = null; // May be populated by post-search fallback
     console.log(`Cache miss: ${niche}. Expanding keywords...`);
 
-    // Step 0.5: Use Claude to generate smart LinkedIn search keywords
+    // Step 0: Use Claude to generate smart search keywords
     let searchKeywords = niche;
     try {
       const kwData = await callAnthropic(
-        `You help optimize LinkedIn people search queries. Given a niche, return 1-3 search keyword variations that would find the most active LinkedIn creators and thought leaders in that space. Return ONLY a JSON array of strings, no explanation. Example: ["B2B SaaS marketing leader", "SaaS growth strategist", "B2B content creator marketing"]`,
-        `Niche: ${niche}\n\nGenerate 1-3 LinkedIn people search keyword variations to find top creators.`,
+        `You help optimize LinkedIn post search queries. Given a niche, return 1-3 keyword variations that would find the most viral/engaging LinkedIn posts in that space. Keep them short (2-4 words). Return ONLY a JSON array of strings.`,
+        `Niche: ${niche}\n\nGenerate 1-3 LinkedIn post search keyword variations.`,
         500
       );
       const kwText = kwData.content[0].text.replace(/```json?\s*/gi, '').replace(/```/g, '').trim();
       const keywords = JSON.parse(kwText);
       if (Array.isArray(keywords) && keywords.length > 0) {
-        searchKeywords = keywords[0]; // Use the best one for the main search
+        searchKeywords = keywords[0];
         console.log('Expanded keywords:', keywords);
       }
     } catch (e) {
       console.log('Keyword expansion failed, using original niche:', e.message);
     }
 
-    // Step 1: Search profiles via harvestapi
-    // Actor input fields (from JSON tab): searchQuery, maxItems, profileScraperMode
-    // Short mode = search results only (name, title, headline, URL) — profiles are FREE
-    // Cost in Short mode: only $0.10 per search page (25 results), no per-profile charge
-    const searchInput = {
-      searchQuery: searchKeywords,
-      maxItems: 25,
-      profileScraperMode: 'short',  // Don't pay $0.004/profile — we only need basic data
-    };
-    console.log('Apify search input:', JSON.stringify(searchInput));
+    // =============================================================
+    // STRATEGY: Search POSTS first, then extract top authors
+    // This is better for finding influencers because:
+    // 1. We get engagement data directly (likes, comments, shares)
+    // 2. Only active posters appear (inactive profiles are filtered out)
+    // 3. We get post content for the "post ideas" feature for free
+    // 4. One API call gives us both profiles AND posts
+    // =============================================================
 
-    let searchResults;
+    console.log(`Searching posts for: "${searchKeywords}"`);
+    let postSearchResults = [];
     try {
-      // Budget: $0.12 (1 search page $0.10 + margin)
-      searchResults = await runApifyActor('harvestapi~linkedin-profile-search', searchInput, 0.12);
-      console.log(`harvestapi returned ${searchResults ? searchResults.length : 0} profiles`);
-      if (searchResults && searchResults.length > 0) {
-        console.log('First result keys:', Object.keys(searchResults[0]).join(', '));
-        console.log('First result sample:', JSON.stringify(searchResults[0]).slice(0, 500));
+      postSearchResults = await runApifyActor('harvestapi~linkedin-post-search', {
+        searchQuery: searchKeywords,
+        maxPosts: 100,
+      }, 0.25);
+      console.log(`Post search returned ${postSearchResults ? postSearchResults.length : 0} posts`);
+      if (postSearchResults && postSearchResults.length > 0) {
+        console.log('First post keys:', Object.keys(postSearchResults[0]).join(', '));
+        console.log('First post sample:', JSON.stringify(postSearchResults[0]).slice(0, 500));
       }
     } catch (e) {
-      console.log('harvestapi profile-search failed:', e.message);
-      searchResults = [];
+      console.log('Post search failed:', e.message);
+      postSearchResults = [];
     }
 
-    // Fallback Strategy: Search POSTS instead of profiles
-    // If profile search fails, search for viral posts in the niche
-    // and extract author info — this is actually better for finding influencers
-    if (!searchResults || searchResults.length === 0) {
-      console.log('Profile search returned 0. Trying POST search approach...');
-      try {
-        const postSearchResults = await runApifyActor('harvestapi~linkedin-post-search', {
-          searchQuery: searchKeywords,
-          maxPosts: 50,
-          sortBy: 'relevance',
-        }, 0.25);
+    if (!postSearchResults || postSearchResults.length === 0) {
+      throw new Error('No posts found for this niche. Try broader keywords like "marketing" or "sales".');
+    }
 
-        console.log(`Post search returned ${postSearchResults ? postSearchResults.length : 0} posts`);
+    // Extract unique authors and aggregate their engagement
+    const authorMap = new Map();
+    for (const post of postSearchResults) {
+      const author = post.author || {};
+      const authorKey = author.publicIdentifier || author.universalName || author.name;
+      if (!authorKey) continue;
 
-        if (postSearchResults && postSearchResults.length > 0) {
-          console.log('First post keys:', Object.keys(postSearchResults[0]).join(', '));
-          console.log('First post sample:', JSON.stringify(postSearchResults[0]).slice(0, 500));
-
-          // Extract unique authors from posts as our "profiles"
-          const authorMap = new Map();
-          for (const post of postSearchResults) {
-            const author = post.author || {};
-            const authorKey = author.publicIdentifier || author.universalName || author.name;
-            if (!authorKey) continue;
-
-            if (!authorMap.has(authorKey)) {
-              authorMap.set(authorKey, {
-                name: author.name || '',
-                title: author.info || author.position || '',
-                profileUrl: author.linkedinUrl || (author.publicIdentifier ? `https://www.linkedin.com/in/${author.publicIdentifier}` : ''),
-                followers: 0,
-                location: '',
-                totalEngagement: 0,
-                postCount: 0,
-              });
-            }
-
-            const a = authorMap.get(authorKey);
-            const eng = post.engagement || {};
-            a.totalEngagement += (eng.likes || 0) + (eng.comments || 0) * 3 + (eng.shares || 0) * 2;
-            a.postCount += 1;
-          }
-
-          // Convert to profiles sorted by total engagement
-          searchResults = Array.from(authorMap.values())
-            .map(a => ({ ...a, followers: a.totalEngagement })) // Use engagement as proxy for influence
-            .sort((a, b) => b.followers - a.followers);
-
-          console.log(`Extracted ${searchResults.length} unique authors from posts`);
-
-          // Also save the posts directly for later use
-          allPostsFromSearch = postSearchResults;
-        }
-      } catch (e2) {
-        console.log('Post search also failed:', e2.message);
+      if (!authorMap.has(authorKey)) {
+        authorMap.set(authorKey, {
+          name: author.name || '',
+          title: author.info || author.position || '',
+          profileUrl: author.linkedinUrl || (author.publicIdentifier ? `https://www.linkedin.com/in/${author.publicIdentifier}` : ''),
+          followers: 0,
+          location: '',
+          totalEngagement: 0,
+          postCount: 0,
+          avgEngagement: 0,
+        });
       }
+
+      const a = authorMap.get(authorKey);
+      const eng = post.engagement || {};
+      const postEng = (eng.likes || 0) + (eng.comments || 0) * 3 + (eng.shares || 0) * 2;
+      a.totalEngagement += postEng;
+      a.postCount += 1;
+      a.avgEngagement = Math.round(a.totalEngagement / a.postCount);
     }
 
-    if (!searchResults || searchResults.length === 0) {
-      throw new Error('No profiles found. Try broader keywords like "marketing" or "sales".');
-    }
-
-    // Log first result structure for debugging
-    if (searchResults[0]) {
-      console.log('Sample profile keys:', Object.keys(searchResults[0]).join(', '));
-    }
-
-    const sorted = searchResults
-      .filter(p => (p.fullName || p.name || p.firstName) && (p.profileUrl || p.url || p.linkedinUrl || p.publicIdentifier))
-      .map(p => ({
-        name: p.fullName || p.name || [p.firstName, p.lastName].filter(Boolean).join(' ') || '',
-        title: p.headline || p.position || p.title || p.occupation || '',
-        profileUrl: p.profileUrl || p.url || p.linkedinUrl || (p.publicIdentifier ? `https://www.linkedin.com/in/${p.publicIdentifier}` : ''),
-        followers: parseInt(p.followersCount || p.followers || p.followerCount || p.connectionsCount || 0),
-        location: (typeof p.location === 'object' ? p.location?.linkedinText : p.location) || p.geo || '',
+    // Rank authors by total engagement — these are the real top voices
+    const sorted = Array.from(authorMap.values())
+      .filter(a => a.name && a.profileUrl)
+      .map(a => ({
+        ...a,
+        followers: a.totalEngagement, // Use engagement as the ranking metric
       }))
-      .sort((a, b) => b.followers - a.followers)
+      .sort((a, b) => b.totalEngagement - a.totalEngagement)
       .slice(0, 20);
 
-    // Step 2: Use post data from the post-search fallback (no extra API call)
-    // If profile search worked (not post-search), we do a single cheap post search
-    let allPosts = [];
+    console.log(`Found ${sorted.length} unique authors from ${postSearchResults.length} posts`);
 
-    if (allPostsFromSearch && allPostsFromSearch.length > 0) {
-      // Already have posts from the fallback strategy — use them directly
-      console.log(`Using ${allPostsFromSearch.length} posts from post-search fallback`);
-      allPosts = allPostsFromSearch
-        .filter(p => p.text || p.postText || p.content)
-        .map(p => ({
-          authorName: p.authorName || p.author?.name || '',
-          authorUrl: p.authorProfileUrl || p.author?.linkedinUrl || p.author?.url || '',
-          text: (p.text || p.postText || p.content || '').slice(0, 500),
-          likes: parseInt(p.likesCount || p.engagement?.likes || p.reactions || p.numLikes || 0),
-          comments: parseInt(p.commentsCount || p.engagement?.comments || p.numComments || 0),
-          reposts: parseInt(p.repostsCount || p.engagement?.shares || p.numReposts || 0),
-          postUrl: p.postUrl || p.linkedinUrl || p.url || '',
-          postedAt: p.postedAt?.date || p.postedAt || p.publishedAt || '',
-        }))
-        .map(p => ({ ...p, engagement: p.likes + p.comments * 3 + p.reposts * 2 }))
-        .sort((a, b) => b.engagement - a.engagement)
-        .slice(0, 50);
-    } else if (sorted.length > 0) {
-      // Profile search worked but we have no posts yet — do one cheap post search
-      console.log('Fetching posts via post-search for the niche...');
-      try {
-        const postSearchResults = await runApifyActor('harvestapi~linkedin-post-search', {
-          searchQuery: searchKeywords,
-          maxPosts: 50,
-          sortBy: 'relevance',
-        }, 0.25);
-
-        if (postSearchResults && postSearchResults.length > 0) {
-          allPosts = postSearchResults
-            .filter(p => p.text || p.postText || p.content)
-            .map(p => ({
-              authorName: p.authorName || p.author?.name || '',
-              authorUrl: p.authorProfileUrl || p.author?.linkedinUrl || p.author?.url || '',
-              text: (p.text || p.postText || p.content || '').slice(0, 500),
-              likes: parseInt(p.likesCount || p.engagement?.likes || p.reactions || p.numLikes || 0),
-              comments: parseInt(p.commentsCount || p.engagement?.comments || p.numComments || 0),
-              reposts: parseInt(p.repostsCount || p.engagement?.shares || p.numReposts || 0),
-              postUrl: p.postUrl || p.linkedinUrl || p.url || '',
-              postedAt: p.postedAt?.date || p.postedAt || p.publishedAt || '',
-            }))
-            .map(p => ({ ...p, engagement: p.likes + p.comments * 3 + p.reposts * 2 }))
-            .sort((a, b) => b.engagement - a.engagement)
-            .slice(0, 50);
-        }
-      } catch (e) {
-        console.log('Post search for content failed:', e.message);
-      }
-    }
+    // Format posts for display
+    const allPosts = postSearchResults
+      .filter(p => p.text || p.postText || p.content)
+      .map(p => ({
+        authorName: p.authorName || p.author?.name || '',
+        authorUrl: p.authorProfileUrl || p.author?.linkedinUrl || p.author?.url || '',
+        text: (p.text || p.postText || p.content || '').slice(0, 500),
+        likes: parseInt(p.likesCount || p.engagement?.likes || p.reactions || p.numLikes || 0),
+        comments: parseInt(p.commentsCount || p.engagement?.comments || p.numComments || 0),
+        reposts: parseInt(p.repostsCount || p.engagement?.shares || p.numReposts || 0),
+        postUrl: p.postUrl || p.linkedinUrl || p.url || '',
+        postedAt: p.postedAt?.date || p.postedAt || p.publishedAt || '',
+      }))
+      .map(p => ({ ...p, engagement: p.likes + p.comments * 3 + p.reposts * 2 }))
+      .sort((a, b) => b.engagement - a.engagement)
+      .slice(0, 50);
 
     // Save to cache
     await saveNicheCache(niche, sorted, allPosts);
