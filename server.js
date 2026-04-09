@@ -241,18 +241,20 @@ app.post('/api/influencers', async (req, res) => {
     }
 
     // Step 1: Search profiles via harvestapi
-    // Actor input fields (from JSON tab): searchQuery, maxItems, autoQuerySegmentation
-    // CRITICAL: Pay-per-event actors need maxTotalChargeUsd (set in runApifyActor)
-    // Cost: search page $0.10 + 25 profiles × $0.004 = $0.20 + margin
+    // Actor input fields (from JSON tab): searchQuery, maxItems, profileScraperMode
+    // Short mode = search results only (name, title, headline, URL) — profiles are FREE
+    // Cost in Short mode: only $0.10 per search page (25 results), no per-profile charge
     const searchInput = {
       searchQuery: searchKeywords,
       maxItems: 25,
+      profileScraperMode: 'short',  // Don't pay $0.004/profile — we only need basic data
     };
     console.log('Apify search input:', JSON.stringify(searchInput));
 
     let searchResults;
     try {
-      searchResults = await runApifyActor('harvestapi~linkedin-profile-search', searchInput, 0.25);
+      // Budget: $0.12 (1 search page $0.10 + margin)
+      searchResults = await runApifyActor('harvestapi~linkedin-profile-search', searchInput, 0.12);
       console.log(`harvestapi returned ${searchResults ? searchResults.length : 0} profiles`);
       if (searchResults && searchResults.length > 0) {
         console.log('First result keys:', Object.keys(searchResults[0]).join(', '));
