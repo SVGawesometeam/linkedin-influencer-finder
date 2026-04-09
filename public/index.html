@@ -387,6 +387,8 @@ function clearAll() {
 
 async function findInfluencers() {
   const niche = document.getElementById('niche').value.trim();
+  const role = document.getElementById('role').value.trim();
+  const goal = document.getElementById('goal').value.trim();
   if (!niche) { showError('Please enter a niche.'); return; }
   hideError();
 
