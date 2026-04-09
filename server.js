@@ -209,7 +209,7 @@ app.post('/api/influencers', async (req, res) => {
   try {
     // Check cache first (doesn't count against rate limit)
     // Cache key includes role+goal + version so algorithm changes invalidate old results
-    const CACHE_VERSION = 'v4';
+    const CACHE_VERSION = 'v5';
     const cacheKey = [CACHE_VERSION, niche, role, goal].filter(Boolean).join('|');
     const cached = await getCachedNiche(cacheKey);
     if (cached) {
@@ -327,8 +327,33 @@ app.post('/api/influencers', async (req, res) => {
     // Rank authors by total engagement — these are the real top voices
     let sorted = Array.from(authorMap.values())
       .filter(a => a.name && a.profileUrl)
-      .sort((a, b) => b.totalEngagement - a.totalEngagement)
-      .slice(0, 15);
+      .sort((a, b) => b.totalEngagement - a.totalEngagement);
+
+    // Filter: only keep authors whose profile title matches the goal/role
+    // e.g., if goal is "Video Editing", only keep people with "video" or "edit" in their title
+    const filterSource = goal || role || '';
+    if (filterSource) {
+      // Extract meaningful words and their stems
+      const words = filterSource.toLowerCase().split(/\s+/).filter(w => w.length > 2);
+      const stems = words.map(w => w.replace(/(ing|er|or|ion|tion|ment|ness|ist|ity)$/, ''));
+      const terms = [...new Set([...words, ...stems])].filter(t => t.length > 2);
+
+      if (terms.length > 0) {
+        const filtered = sorted.filter(a => {
+          const title = (a.title || '').toLowerCase();
+          return terms.some(term => title.includes(term));
+        });
+        console.log(`Profile title filter: ${sorted.length} → ${filtered.length} authors match "${filterSource}" (terms: ${terms.join(', ')})`);
+        // Only apply filter if it leaves enough results
+        if (filtered.length >= 3) {
+          sorted = filtered;
+        } else {
+          console.log('Too few matches after title filter, keeping all authors');
+        }
+      }
+    }
+
+    sorted = sorted.slice(0, 15);
 
     // Format posts for display — ONLY high engagement posts
     const allPosts = postSearchResults
