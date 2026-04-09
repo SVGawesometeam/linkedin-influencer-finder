@@ -195,18 +195,41 @@ app.post('/api/influencers', async (req, res) => {
       console.log('Keyword expansion failed, using original niche:', e.message);
     }
 
-    // Step 1: Search profiles
+    // Step 1: Search profiles — try multiple param formats for robustness
+    const searchUrl = `https://www.linkedin.com/search/results/people/?keywords=${encodeURIComponent(searchKeywords)}&origin=GLOBAL_SEARCH_HEADER`;
     const searchInput = {
-      searchUrl: `https://www.linkedin.com/search/results/people/?keywords=${encodeURIComponent(searchKeywords)}&origin=GLOBAL_SEARCH_HEADER`,
+      searchUrl,
+      takePages: 3,
+      maxItems: 50,
       maxProfiles: 50,
     };
     console.log('Apify search input:', JSON.stringify(searchInput));
 
-    const searchResults = await runApifyActor('harvestapi~linkedin-profile-search', searchInput);
-    console.log(`Apify returned ${searchResults ? searchResults.length : 0} profiles`);
+    let searchResults;
+    try {
+      searchResults = await runApifyActor('harvestapi~linkedin-profile-search', searchInput);
+      console.log(`harvestapi returned ${searchResults ? searchResults.length : 0} profiles`);
+    } catch (e) {
+      console.log('harvestapi failed:', e.message, '— trying backup actor');
+      searchResults = [];
+    }
+
+    // Fallback: try a different actor if first one returns nothing
+    if (!searchResults || searchResults.length === 0) {
+      console.log('Trying backup actor: logical_scrapers~linkedin-people-search-scraper');
+      try {
+        searchResults = await runApifyActor('logical_scrapers~linkedin-people-search-scraper', {
+          search_keywords: searchKeywords,
+          max_results: 50,
+        });
+        console.log(`logical_scrapers returned ${searchResults ? searchResults.length : 0} profiles`);
+      } catch (e2) {
+        console.log('Backup actor also failed:', e2.message);
+      }
+    }
 
     if (!searchResults || searchResults.length === 0) {
-      throw new Error('No profiles found. Try different keywords.');
+      throw new Error('No profiles found. Try broader keywords like "marketing" instead of a very specific niche.');
     }
 
     // Log first result structure for debugging
