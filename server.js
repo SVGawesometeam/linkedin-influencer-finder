@@ -209,7 +209,7 @@ app.post('/api/influencers', async (req, res) => {
   try {
     // Check cache first (doesn't count against rate limit)
     // Cache key includes role+goal + version so algorithm changes invalidate old results
-    const CACHE_VERSION = 'v5';
+    const CACHE_VERSION = 'v6';
     const cacheKey = [CACHE_VERSION, niche, role, goal].filter(Boolean).join('|');
     const cached = await getCachedNiche(cacheKey);
     if (cached) {
@@ -254,42 +254,47 @@ app.post('/api/influencers', async (req, res) => {
       allKeywords.push(niche);
     }
 
-    console.log(`Search keywords (direct): ${JSON.stringify(allKeywords)}`);
+    // Build profile search query — search for people with this title/role
+    const profileQuery = goal || role || niche;
+    console.log(`Search keywords: posts=${JSON.stringify(allKeywords)}, profiles="${profileQuery}"`);
 
     // =============================================================
-    // STRATEGY: Search POSTS first, then extract top authors
-    // Use ALL keywords to find the most relevant posts
+    // STRATEGY: Run BOTH searches in parallel
+    // 1. Profile search → finds people who ARE video editors (relevant)
+    // 2. Post search → finds posts about video editing (engagement data)
+    // Then merge: profiles give relevance, posts give engagement
     // =============================================================
 
-    let postSearchResults = [];
-    try {
-      postSearchResults = await runApifyActor('harvestapi~linkedin-post-search', {
+    const [postResults, profileResults] = await Promise.all([
+      // Post search — for engagement data and content
+      runApifyActor('harvestapi~linkedin-post-search', {
         searchQueries: allKeywords,
         maxPosts: 100,
-      }, 0.25);
-      console.log(`Post search returned ${postSearchResults ? postSearchResults.length : 0} posts`);
-      if (postSearchResults && postSearchResults.length > 0) {
-        console.log('First post keys:', Object.keys(postSearchResults[0]).join(', '));
-        console.log('First post author keys:', Object.keys(postSearchResults[0].author || {}).join(', '));
-        console.log('First post author FULL:', JSON.stringify(postSearchResults[0].author || {}));
-        console.log('First post engagement:', JSON.stringify(postSearchResults[0].engagement || {}));
-      }
-    } catch (e) {
-      console.log('Post search failed:', e.message);
-      postSearchResults = [];
+      }, 0.25).catch(e => { console.log('Post search failed:', e.message); return []; }),
+
+      // Profile search — for finding actual relevant people
+      runApifyActor('harvestapi~linkedin-profile-search', {
+        searchQuery: profileQuery,
+        maxItems: 30,
+        profileScraperMode: 'short',
+      }, 0.10).catch(e => { console.log('Profile search failed:', e.message); return []; }),
+    ]);
+
+    let postSearchResults = Array.isArray(postResults) ? postResults : [];
+    const profileSearchResults = Array.isArray(profileResults) ? profileResults : [];
+
+    console.log(`Post search: ${postSearchResults.length} posts, Profile search: ${profileSearchResults.length} profiles`);
+
+    if (profileSearchResults.length > 0) {
+      console.log('Profile result keys:', Object.keys(profileSearchResults[0]).join(', '));
+      console.log('Profile sample:', JSON.stringify(profileSearchResults[0]).slice(0, 500));
     }
 
-    // Ensure we have a valid array
-    if (!Array.isArray(postSearchResults)) {
-      console.log('Post search returned non-array:', typeof postSearchResults, JSON.stringify(postSearchResults).slice(0, 300));
-      postSearchResults = [];
-    }
-
-    if (postSearchResults.length === 0) {
+    if (postSearchResults.length === 0 && profileSearchResults.length === 0) {
       throw new Error('We couldn\'t find influencers for this niche yet. Try broader terms like "marketing", "sales", or "leadership" — or describe your topic differently.');
     }
 
-    // Filter out hiring/job posts — they clutter results and aren't useful for content ideas
+    // Filter out hiring/job posts
     const hiringWords = /\b(hiring|we're looking for|job opening|job opportunity|work from home job|urgent\s*hiring|apply now|join our team|remote job|we are hiring)\b/i;
     postSearchResults = postSearchResults.filter(p => {
       if (!p || typeof p !== 'object') return false;
@@ -298,62 +303,92 @@ app.post('/api/influencers', async (req, res) => {
     });
     console.log(`After filtering hiring posts: ${postSearchResults.length} posts remain`);
 
-    // Extract unique authors and aggregate their engagement
-    const authorMap = new Map();
+    // Build engagement map from posts
+    const engagementMap = new Map(); // key → { totalEngagement, postCount }
     for (const post of postSearchResults) {
       const author = post.author || {};
       const authorKey = author.publicIdentifier || author.universalName || author.name;
       if (!authorKey) continue;
 
-      if (!authorMap.has(authorKey)) {
-        authorMap.set(authorKey, {
+      if (!engagementMap.has(authorKey)) {
+        engagementMap.set(authorKey, {
           name: author.name || '',
           title: author.info || author.position || author.headline || author.description || '',
           profileUrl: author.linkedinUrl || author.url || (author.publicIdentifier ? `https://www.linkedin.com/in/${author.publicIdentifier}` : ''),
           totalEngagement: 0,
           postCount: 0,
-          avgEngagement: 0,
         });
       }
 
-      const a = authorMap.get(authorKey);
+      const a = engagementMap.get(authorKey);
       const eng = (post.engagement && typeof post.engagement === 'object') ? post.engagement : {};
       const postEng = (Number(eng.likes) || 0) + (Number(eng.comments) || 0) * 3 + (Number(eng.shares) || 0) * 2;
       a.totalEngagement += postEng;
       a.postCount += 1;
-      a.avgEngagement = Math.round(a.totalEngagement / a.postCount);
     }
 
-    // Rank authors by total engagement — these are the real top voices
-    let sorted = Array.from(authorMap.values())
-      .filter(a => a.name && a.profileUrl)
-      .sort((a, b) => b.totalEngagement - a.totalEngagement);
+    // Build profile map from profile search (these are guaranteed relevant people)
+    const profileMap = new Map();
+    for (const p of profileSearchResults) {
+      if (!p || typeof p !== 'object') continue;
+      const key = p.publicIdentifier || p.universalName || p.name || '';
+      if (!key) continue;
+      profileMap.set(key, {
+        name: p.name || p.fullName || '',
+        title: p.title || p.headline || p.position || p.description || '',
+        profileUrl: p.linkedinUrl || p.url || p.profileUrl || (p.publicIdentifier ? `https://www.linkedin.com/in/${p.publicIdentifier}` : ''),
+      });
+    }
+    console.log(`Engagement map: ${engagementMap.size} authors, Profile map: ${profileMap.size} profiles`);
 
-    // Filter: only keep authors whose profile title matches the goal/role
-    // e.g., if goal is "Video Editing", only keep people with "video" or "edit" in their title
+    // Merge: combine profile-searched people with engagement data
+    const mergedMap = new Map();
+
+    // First: add all profile-searched people (guaranteed relevant)
+    for (const [key, profile] of profileMap) {
+      const engagement = engagementMap.get(key);
+      mergedMap.set(key, {
+        name: profile.name,
+        title: profile.title,
+        profileUrl: profile.profileUrl,
+        totalEngagement: engagement ? engagement.totalEngagement : 0,
+        postCount: engagement ? engagement.postCount : 0,
+        source: engagement ? 'both' : 'profile', // found in both = best
+      });
+    }
+
+    // Second: add post authors whose title matches the goal (if not already added)
     const filterSource = goal || role || '';
-    if (filterSource) {
-      // Extract meaningful words and their stems
-      const words = filterSource.toLowerCase().split(/\s+/).filter(w => w.length > 2);
-      const stems = words.map(w => w.replace(/(ing|er|or|ion|tion|ment|ness|ist|ity)$/, ''));
-      const terms = [...new Set([...words, ...stems])].filter(t => t.length > 2);
+    const words = filterSource.toLowerCase().split(/\s+/).filter(w => w.length > 2);
+    const stems = words.map(w => w.replace(/(ing|er|or|ion|tion|ment|ness|ist|ity)$/, ''));
+    const terms = [...new Set([...words, ...stems])].filter(t => t.length > 2);
 
-      if (terms.length > 0) {
-        const filtered = sorted.filter(a => {
-          const title = (a.title || '').toLowerCase();
-          return terms.some(term => title.includes(term));
+    for (const [key, author] of engagementMap) {
+      if (mergedMap.has(key)) continue; // already added from profile search
+      // Only add if their title matches the goal
+      const title = (author.title || '').toLowerCase();
+      const titleMatches = terms.length === 0 || terms.some(term => title.includes(term));
+      if (titleMatches) {
+        mergedMap.set(key, {
+          ...author,
+          source: 'posts',
         });
-        console.log(`Profile title filter: ${sorted.length} → ${filtered.length} authors match "${filterSource}" (terms: ${terms.join(', ')})`);
-        // Only apply filter if it leaves enough results
-        if (filtered.length >= 3) {
-          sorted = filtered;
-        } else {
-          console.log('Too few matches after title filter, keeping all authors');
-        }
       }
     }
 
-    sorted = sorted.slice(0, 15);
+    // Sort: "both" sources first, then by engagement
+    let sorted = Array.from(mergedMap.values())
+      .filter(a => a.name && a.profileUrl)
+      .sort((a, b) => {
+        // Prioritize people found in both searches
+        const sourceOrder = { both: 0, profile: 1, posts: 2 };
+        const sourceDiff = (sourceOrder[a.source] || 2) - (sourceOrder[b.source] || 2);
+        if (sourceDiff !== 0) return sourceDiff;
+        return b.totalEngagement - a.totalEngagement;
+      })
+      .slice(0, 15);
+
+    console.log(`Final influencer list: ${sorted.length} (sources: ${sorted.map(a => a.source).join(', ')})`);
 
     // Format posts for display — ONLY high engagement posts
     const allPosts = postSearchResults
