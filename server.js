@@ -297,8 +297,8 @@ app.post('/api/influencers', async (req, res) => {
       // Post search — for engagement data and content
       runApifyActor('harvestapi~linkedin-post-search', {
         searchQueries: allKeywords,
-        maxPosts: 200,
-      }, 0.35).catch(e => { console.log('Post search failed:', e.message); return []; }),
+        maxPosts: 100,
+      }, 0.25).catch(e => { console.log('Post search failed:', e.message); return []; }),
 
       // Profile search — for finding actual relevant people
       runApifyActor('harvestapi~linkedin-profile-search', {
