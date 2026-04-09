@@ -320,7 +320,7 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
     <div class="influencer-grid" id="influencerGrid"></div>
 
     <h2 class="section-title" style="margin-top:2.5rem">Top Posts by Engagement</h2>
-    <p class="section-sub">The most-liked, most-commented posts from these influencers.</p>
+    <p class="section-sub">The highest-performing posts from these influencers.</p>
     <div class="post-list" id="postList"></div>
 
     <!-- Generate ideas button -->
@@ -339,8 +339,29 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
       <div class="draft-section" id="draftSection" style="display:none">
         <div class="card">
           <label>Draft a post</label>
-          <p class="hint">Select an idea and we'll write a full LinkedIn post for you.</p>
-          <select id="ideaSelect" style="width:100%; padding:0.65rem; border:1px solid var(--input-border); border-radius:var(--radius-sm); font-family:inherit; font-size:0.9rem; margin-bottom:0.75rem"></select>
+          <p class="hint">Select an idea, add your context, and we'll write a full LinkedIn post in your voice.</p>
+
+          <div class="form-group">
+            <label for="ideaSelect">Pick an idea</label>
+            <select id="ideaSelect" style="width:100%; padding:0.65rem; border:1px solid var(--input-border); border-radius:var(--radius-sm); font-family:inherit; font-size:0.9rem;"></select>
+          </div>
+
+          <div class="form-group">
+            <label for="draftContext">What do you want to write about?</label>
+            <p class="hint">Add specific context, a personal story, data points, or an angle you want the post to focus on.</p>
+            <textarea id="draftContext" rows="3" placeholder="e.g. I just helped a client automate their outreach and it 3x'd their reply rate in 2 weeks. I want to share what we did differently."></textarea>
+          </div>
+
+          <div class="form-group">
+            <label for="toneOfVoice">Your tone of voice</label>
+            <p class="hint">Describe your writing style or paste a sample of your writing and we'll analyze it.</p>
+            <textarea id="toneOfVoice" rows="3" placeholder="e.g. Conversational, short punchy sentences. I use real numbers and examples. No fluff, no emojis. Or paste a sample of your writing here..."></textarea>
+            <div class="btn-row" style="margin-top:0.5rem">
+              <button class="btn-secondary btn-sm" id="analyzeToneBtn" onclick="analyzeTone()">Analyze my writing style</button>
+              <span class="hint" id="toneStatus" style="line-height:2.2"></span>
+            </div>
+          </div>
+
           <button class="btn-primary" id="draftBtn" onclick="draftPost()">Draft this post</button>
           <div class="draft-output" id="draftOutput" style="display:none"></div>
           <div class="btn-row" id="draftActions" style="display:none; justify-content:flex-end">
@@ -469,7 +490,7 @@ function renderPosts() {
     list.innerHTML = '<div class="card" style="text-align:center;color:var(--muted)">No posts scraped yet. Try a different niche or broader keywords.</div>';
     return;
   }
-  list.innerHTML = currentPosts.slice(0, 20).map(p => `
+  list.innerHTML = currentPosts.slice(0, 7).map(p => `
     <div class="post-card">
       <div class="post-meta">
         <span class="post-author">${esc(p.authorName)}</span>
@@ -500,7 +521,7 @@ async function generateIdeas() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         niche, role, goal,
-        topPosts: currentPosts.slice(0, 20),
+        topPosts: currentPosts.slice(0, 7),
         profiles: currentProfiles.slice(0, 10),
       }),
     });
@@ -547,6 +568,44 @@ function populateIdeaSelect() {
   ).join('');
 }
 
+async function analyzeTone() {
+  const textarea = document.getElementById('toneOfVoice');
+  const sample = textarea.value.trim();
+  if (sample.length < 50) {
+    showError('Please paste at least a few sentences of your writing so we can analyze your style.');
+    return;
+  }
+
+  const btn = document.getElementById('analyzeToneBtn');
+  const status = document.getElementById('toneStatus');
+  btn.disabled = true;
+  status.textContent = 'Analyzing your writing style...';
+  hideError();
+
+  try {
+    const res = await fetch('/api/analyze-tone', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sampleText: sample }),
+    });
+
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.error || 'Analysis failed');
+    }
+
+    const data = await res.json();
+    textarea.value = data.tone;
+    status.textContent = 'Done! Your tone profile is ready.';
+    setTimeout(() => { status.textContent = ''; }, 3000);
+  } catch (e) {
+    showError(e.message);
+    status.textContent = '';
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 async function draftPost() {
   const idx = parseInt(document.getElementById('ideaSelect').value);
   const idea = currentIdeas[idx];
@@ -561,14 +620,28 @@ async function draftPost() {
   const niche = document.getElementById('niche').value.trim();
   const role = document.getElementById('role').value.trim();
   const goal = document.getElementById('goal').value.trim();
+  const draftContext = document.getElementById('draftContext').value.trim();
+  const toneOfVoice = document.getElementById('toneOfVoice').value.trim();
+
+  let systemPrompt = 'You are an expert LinkedIn ghostwriter. Write a compelling, ready-to-post LinkedIn post. Return ONLY the post text. No commentary, no intro like "Here\'s your post".';
+  if (toneOfVoice) {
+    systemPrompt += `\n\nIMPORTANT — Write in this exact tone of voice:\n${toneOfVoice}`;
+  }
+
+  let userContent = `Write a LinkedIn post based on this idea:\nHook: ${idea.hook}\nFormat: ${idea.format}\nWhy it works: ${idea.why}`;
+  userContent += `\n\nAuthor context:\n- Niche: ${niche}`;
+  if (role) userContent += `\n- Role: ${role}`;
+  if (goal) userContent += `\n- Known for: ${goal}`;
+  if (draftContext) userContent += `\n\nSpecific context for this post:\n${draftContext}`;
+  userContent += '\n\nMake it engaging, authentic. Use line breaks for readability. Under 1500 characters.';
 
   try {
     const res = await fetch('/api/generate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        system: 'You are an expert LinkedIn ghostwriter. Write a compelling, ready-to-post LinkedIn post. Return ONLY the post text. No commentary.',
-        messages: [{ role: 'user', content: `Write a LinkedIn post based on this idea:\nHook: ${idea.hook}\nFormat: ${idea.format}\nWhy it works: ${idea.why}\n\nContext:\n- Niche: ${niche}\n${role ? `- Role: ${role}` : ''}\n${goal ? `- Goal: ${goal}` : ''}\n\nMake it engaging, authentic. Use line breaks for readability. Under 1500 characters.` }],
+        system: systemPrompt,
+        messages: [{ role: 'user', content: userContent }],
       }),
     });
 

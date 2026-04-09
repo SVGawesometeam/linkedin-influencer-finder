@@ -400,7 +400,7 @@ Example: if niche is "marketing" and goal is "AI automation specialist", return 
 app.post('/api/post-ideas', async (req, res) => {
   const { niche, role, goal, topPosts, profiles } = req.body;
 
-  const topPostsSummary = (topPosts || []).slice(0, 20).map((p, i) =>
+  const topPostsSummary = (topPosts || []).slice(0, 7).map((p, i) =>
     `Post ${i + 1} (${p.likes} likes, ${p.comments} comments, ${p.reposts} reposts) by ${p.authorName}:\n"${p.text.slice(0, 300)}"\nURL: ${p.postUrl}`
   ).join('\n\n');
 
@@ -410,7 +410,7 @@ app.post('/api/post-ideas', async (req, res) => {
 
   const systemPrompt = `You are a LinkedIn content strategist. You analyze top-performing posts from real influencers and generate post ideas tailored to a user's niche.
 
-Return ONLY a raw JSON array (no markdown, no backticks) of exactly 15 objects:
+Return ONLY a raw JSON array (no markdown, no backticks) of exactly 10 objects:
 [
   {
     "hook": "The opening line of the post",
@@ -438,7 +438,7 @@ ${profilesSummary}
 TOP POSTS (by engagement):
 ${topPostsSummary}
 
-Generate 15 post ideas inspired by what's working.`;
+Generate 10 post ideas inspired by what's working.`;
 
   try {
     const data = await callAnthropic(systemPrompt, userMsg, 4000);
@@ -449,6 +449,29 @@ Generate 15 post ideas inspired by what's working.`;
   } catch (err) {
     console.error('Post ideas error:', err.message);
     res.status(500).json({ error: err.message });
+  }
+});
+
+// =============================================
+// API: Analyze tone of voice from sample writing
+// =============================================
+app.post('/api/analyze-tone', async (req, res) => {
+  const { sampleText } = req.body;
+  if (!sampleText || sampleText.trim().length < 50) {
+    return res.status(400).json({ error: 'Please paste at least a few sentences of your writing.' });
+  }
+
+  try {
+    const data = await callAnthropic(
+      `You analyze writing samples and extract the author's unique tone of voice. Return a concise tone profile (3-5 bullet points) describing their style. Focus on: sentence length, formality level, use of stories vs data, humor, vocabulary complexity, and any distinctive patterns. Be specific and actionable — a ghostwriter should be able to replicate this voice from your description. Return ONLY the bullet points, no intro or outro.`,
+      `Analyze the tone of voice in this writing sample:\n\n"${sampleText.slice(0, 3000)}"`,
+      800
+    );
+    const tone = data.content[0].text;
+    res.json({ tone });
+  } catch (err) {
+    console.error('Tone analysis error:', err.message);
+    res.status(500).json({ error: 'Could not analyze tone. Please try again.' });
   }
 });
 
