@@ -209,7 +209,7 @@ app.post('/api/influencers', async (req, res) => {
   try {
     // Check cache first (doesn't count against rate limit)
     // Cache key includes role+goal + version so algorithm changes invalidate old results
-    const CACHE_VERSION = 'v7';
+    const CACHE_VERSION = 'v8';
     const cacheKey = [CACHE_VERSION, niche, role, goal].filter(Boolean).join('|');
     const cached = await getCachedNiche(cacheKey);
     if (cached) {
@@ -234,14 +234,13 @@ app.post('/api/influencers', async (req, res) => {
     console.log(`Cache miss: ${niche}. Expanding keywords...`);
 
     // Step 0: Build search keywords
-    // SIMPLE AND DIRECT: Use the goal/role as the primary keyword — don't rely
-    // on AI to guess. The goal IS the specialization the user cares about.
+    // Use the goal directly PLUS a few synonyms so we don't miss relevant posts
+    // that use different wording for the same topic.
     let allKeywords = [];
+    const primaryTerm = goal || role || niche;
 
     if (goal) {
-      // Goal is most specific — use it directly
       allKeywords.push(goal);
-      // Add a combined keyword: goal + niche
       if (niche.toLowerCase() !== goal.toLowerCase()) {
         allKeywords.push(`${goal} ${niche}`);
       }
@@ -251,6 +250,35 @@ app.post('/api/influencers', async (req, res) => {
         allKeywords.push(`${role} ${niche}`);
       }
     } else {
+      allKeywords.push(niche);
+    }
+
+    // Generate synonym keywords via Claude (tightly scoped to the goal meaning)
+    try {
+      const synonymData = await callAnthropic(
+        `You generate LinkedIn search keywords. Return ONLY a JSON array of 3-4 short synonym phrases (2-4 words each) that mean the same thing as the user's topic. Stay VERY close to the original meaning — just rephrase it, don't broaden it. No explanations, just the JSON array.`,
+        `Topic: "${primaryTerm}"${niche !== primaryTerm ? `\nField: ${niche}` : ''}`,
+        200
+      );
+      const synonymText = synonymData.content[0].text.trim();
+      const cleaned = synonymText.replace(/```json?\s*/gi, '').replace(/```/g, '').trim();
+      const synonyms = JSON.parse(cleaned);
+      if (Array.isArray(synonyms)) {
+        // Add synonyms that aren't duplicates
+        for (const s of synonyms) {
+          const phrase = String(s).trim();
+          if (phrase && !allKeywords.some(k => k.toLowerCase() === phrase.toLowerCase())) {
+            allKeywords.push(phrase);
+          }
+        }
+      }
+      console.log(`Synonym expansion: ${JSON.stringify(synonyms)}`);
+    } catch (e) {
+      console.log('Synonym expansion failed, continuing with original keywords:', e.message);
+    }
+
+    // Also add the niche itself if not already included
+    if (!allKeywords.some(k => k.toLowerCase() === niche.toLowerCase())) {
       allKeywords.push(niche);
     }
 
@@ -269,8 +297,8 @@ app.post('/api/influencers', async (req, res) => {
       // Post search — for engagement data and content
       runApifyActor('harvestapi~linkedin-post-search', {
         searchQueries: allKeywords,
-        maxPosts: 100,
-      }, 0.25).catch(e => { console.log('Post search failed:', e.message); return []; }),
+        maxPosts: 200,
+      }, 0.35).catch(e => { console.log('Post search failed:', e.message); return []; }),
 
       // Profile search — for finding actual relevant people
       runApifyActor('harvestapi~linkedin-profile-search', {
