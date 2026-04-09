@@ -209,7 +209,7 @@ app.post('/api/influencers', async (req, res) => {
   try {
     // Check cache first (doesn't count against rate limit)
     // Cache key includes role+goal + version so algorithm changes invalidate old results
-    const CACHE_VERSION = 'v6';
+    const CACHE_VERSION = 'v7';
     const cacheKey = [CACHE_VERSION, niche, role, goal].filter(Boolean).join('|');
     const cached = await getCachedNiche(cacheKey);
     if (cached) {
@@ -311,10 +311,13 @@ app.post('/api/influencers', async (req, res) => {
       if (!authorKey) continue;
 
       if (!engagementMap.has(authorKey)) {
+        // Extract profile picture from author.avatar.url
+        const avatarObj = (author.avatar && typeof author.avatar === 'object') ? author.avatar : {};
         engagementMap.set(authorKey, {
           name: author.name || '',
           title: author.info || author.position || author.headline || author.description || '',
           profileUrl: author.linkedinUrl || author.url || (author.publicIdentifier ? `https://www.linkedin.com/in/${author.publicIdentifier}` : ''),
+          profileImage: avatarObj.url || '',
           totalEngagement: 0,
           postCount: 0,
         });
@@ -351,9 +354,10 @@ app.post('/api/influencers', async (req, res) => {
         name: profile.name,
         title: profile.title,
         profileUrl: profile.profileUrl,
+        profileImage: engagement ? engagement.profileImage || '' : '',
         totalEngagement: engagement ? engagement.totalEngagement : 0,
         postCount: engagement ? engagement.postCount : 0,
-        source: engagement ? 'both' : 'profile', // found in both = best
+        source: engagement ? 'both' : 'profile',
       });
     }
 
@@ -376,17 +380,13 @@ app.post('/api/influencers', async (req, res) => {
       }
     }
 
-    // Sort: "both" sources first, then by engagement
+    // Sort: by engagement, filter out small profiles (min 70 engagement)
     let sorted = Array.from(mergedMap.values())
-      .filter(a => a.name && a.profileUrl)
-      .sort((a, b) => {
-        // Prioritize people found in both searches
-        const sourceOrder = { both: 0, profile: 1, posts: 2 };
-        const sourceDiff = (sourceOrder[a.source] || 2) - (sourceOrder[b.source] || 2);
-        if (sourceDiff !== 0) return sourceDiff;
-        return b.totalEngagement - a.totalEngagement;
-      })
+      .filter(a => a.name && a.profileUrl && a.totalEngagement >= 70)
+      .sort((a, b) => b.totalEngagement - a.totalEngagement)
       .slice(0, 15);
+
+    console.log(`Final influencer list: ${sorted.length} (after min 70 engagement filter)`);
 
     console.log(`Final influencer list: ${sorted.length} (sources: ${sorted.map(a => a.source).join(', ')})`);
 

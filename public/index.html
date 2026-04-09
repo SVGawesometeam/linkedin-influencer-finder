@@ -464,15 +464,24 @@ function formatNum(n) {
 
 function renderProfiles() {
   const grid = document.getElementById('influencerGrid');
-  grid.innerHTML = currentProfiles.map((p, i) => `
+  grid.innerHTML = currentProfiles.map((p, i) => {
+    const hasImage = p.profileImage && p.profileImage.startsWith('http');
+    const imgHtml = hasImage
+      ? `<img src="${esc(p.profileImage)}" alt="" style="width:44px;height:44px;border-radius:50%;object-fit:cover;flex-shrink:0">`
+      : '';
+    return `
     <div class="inf-card">
-      <div>
-        <div class="inf-name">${esc(p.name)}</div>
-        <div class="inf-title">${esc(p.title).slice(0, 100)}</div>
+      <div class="inf-header">
+        ${imgHtml}
+        <div>
+          <div class="inf-name">${esc(p.name)}</div>
+          <div class="inf-title">${esc(p.title).slice(0, 100)}</div>
+        </div>
       </div>
       <a class="inf-link" href="${esc(p.profileUrl)}" target="_blank" rel="noopener">View profile &rarr;</a>
     </div>
-  `).join('');
+  `;
+  }).join('');
 }
 
 function renderPosts() {
