@@ -291,7 +291,7 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
           <input type="text" id="role" placeholder="e.g. Head of Growth">
         </div>
         <div class="form-group">
-          <label for="goal">What you want to be known for (optional)</label>
+          <label for="goal">What you want to be known for *</label>
           <input type="text" id="goal" placeholder="e.g. GTM strategies for early-stage founders">
         </div>
       </div>
@@ -411,6 +411,7 @@ async function findInfluencers() {
   const role = document.getElementById('role').value.trim();
   const goal = document.getElementById('goal').value.trim();
   if (!niche) { showError('Please enter a niche.'); return; }
+  if (!goal) { showError('Please enter what you want to be known for.'); return; }
   hideError();
 
   const btn = document.getElementById('findBtn');
