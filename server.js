@@ -205,15 +205,15 @@ app.post('/api/influencers', async (req, res) => {
     // CRITICAL: Pay-per-event actors need maxTotalChargeUsd (set in runApifyActor)
     const searchInput = {
       search: searchKeywords,
-      takePages: 2,
+      takePages: 1,       // 1 page = up to 25 profiles, enough for top 20
       startPage: 1,
     };
     console.log('Apify search input:', JSON.stringify(searchInput));
 
     let searchResults;
     try {
-      // Budget: $0.50 max (2 search pages @ $0.10 each + profiles)
-      searchResults = await runApifyActor('harvestapi~linkedin-profile-search', searchInput, 0.5);
+      // Budget: $0.15 (actor start $0.02 + 1 search page $0.10 + margin)
+      searchResults = await runApifyActor('harvestapi~linkedin-profile-search', searchInput, 0.15);
       console.log(`harvestapi returned ${searchResults ? searchResults.length : 0} profiles`);
       if (searchResults && searchResults.length > 0) {
         console.log('First result keys:', Object.keys(searchResults[0]).join(', '));
@@ -232,10 +232,10 @@ app.post('/api/influencers', async (req, res) => {
       try {
         const postSearchResults = await runApifyActor('harvestapi~linkedin-post-search', {
           search: searchKeywords,
-          takePages: 2,
+          takePages: 1,       // 1 page of posts is enough
           startPage: 1,
           sortBy: 'relevance',
-        }, 0.5);
+        }, 0.15);
 
         console.log(`Post search returned ${postSearchResults ? postSearchResults.length : 0} posts`);
 
@@ -289,8 +289,8 @@ app.post('/api/influencers', async (req, res) => {
       try {
         searchResults = await runApifyActor('powerai~linkedin-peoples-search-scraper', {
           keyword: searchKeywords,
-          maxResults: 50,
-        }, 0.5);
+          maxResults: 25,
+        }, 0.15);
         console.log(`powerai returned ${searchResults ? searchResults.length : 0} profiles`);
         if (searchResults && searchResults.length > 0) {
           console.log('First result keys:', Object.keys(searchResults[0]).join(', '));
@@ -334,7 +334,7 @@ app.post('/api/influencers', async (req, res) => {
           profiles: profileUrls,
           scrapePostedLimit: '3months',
           takePages: 1,
-        }, 0.5);
+        }, 0.20);
       } catch (e) {
         console.log('Post scraping failed:', e.message);
         postResults = [];
