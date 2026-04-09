@@ -316,7 +316,7 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   <div id="results" style="display:none">
 
     <h2 class="section-title">Top Influencers</h2>
-    <p class="section-sub">Sorted by post engagement. Real LinkedIn data scraped live.</p>
+    <p class="section-sub">Ranked by engagement across their posts. Real LinkedIn data.</p>
     <div class="influencer-grid" id="influencerGrid"></div>
 
     <h2 class="section-title" style="margin-top:2.5rem">Top Posts by Engagement</h2>
@@ -464,21 +464,14 @@ function formatNum(n) {
 function renderProfiles() {
   const grid = document.getElementById('influencerGrid');
   grid.innerHTML = currentProfiles.map((p, i) => {
-    const hasImage = p.profileImage && p.profileImage.startsWith('http');
-    const avatarHtml = hasImage
-      ? `<img src="${esc(p.profileImage)}" alt="" style="width:42px;height:42px;border-radius:50%;object-fit:cover;flex-shrink:0">`
-      : '';
-    const followersText = p.followers && p.followers > 0 ? formatNum(p.followers) + ' followers' : '';
+    const engText = p.totalEngagement ? formatNum(p.totalEngagement) + ' total engagement' : '';
     const postsText = p.postCount ? p.postCount + ' post' + (p.postCount > 1 ? 's' : '') + ' found' : '';
-    const metaText = [followersText, postsText].filter(Boolean).join(' · ');
+    const metaText = [engText, postsText].filter(Boolean).join(' · ');
     return `
     <div class="inf-card">
-      <div class="inf-header">
-        ${avatarHtml}
-        <div>
-          <div class="inf-name">${esc(p.name)}</div>
-          <div class="inf-title">${esc(p.title).slice(0, 80)}</div>
-        </div>
+      <div>
+        <div class="inf-name">${esc(p.name)}</div>
+        <div class="inf-title">${esc(p.title).slice(0, 100)}</div>
       </div>
       ${metaText ? `<div class="inf-followers">${metaText}</div>` : ''}
       <a class="inf-link" href="${esc(p.profileUrl)}" target="_blank" rel="noopener">View profile &rarr;</a>
