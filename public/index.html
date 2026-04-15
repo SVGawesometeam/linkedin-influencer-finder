@@ -75,6 +75,23 @@ input, textarea {
   color: var(--text);
   transition: all 0.2s;
 }
+select {
+  width: 100%;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--input-border);
+  border-radius: var(--radius-sm);
+  font-size: 0.92rem;
+  font-family: inherit;
+  background: #fff;
+  color: var(--text);
+  transition: all 0.2s;
+  cursor: pointer;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%237a8a9e' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 1rem center;
+}
+select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(26,86,219,0.1); }
 input::placeholder, textarea::placeholder { color: #b0bac8; }
 input:focus, textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(26,86,219,0.1); }
 textarea { resize: vertical; min-height: 70px; }
@@ -273,32 +290,68 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 <div class="container">
   <div class="header">
     <h1>Find <em>Real</em> LinkedIn Influencers in Your Niche</h1>
-    <p class="subtitle">We scrape actual profiles and posts to find who's getting engagement right now.</p>
-    <p style="margin-top:0.75rem"><a href="/industries.html" style="color:var(--accent);font-size:0.88rem;font-weight:500;text-decoration:none">Or browse pre-built lists for 30 industries &rarr;</a></p>
+    <p class="subtitle">Pre-curated lists of the top LinkedIn voices across 30 industries. Real data, real engagement.</p>
   </div>
 
   <div class="error" id="error"></div>
 
-  <!-- Input form -->
+  <!-- Industry selector -->
   <div class="narrow" id="formSection">
     <div class="card">
-      <div class="form-group">
-        <label for="niche">Niche *</label>
-        <input type="text" id="niche" placeholder="e.g. B2B SaaS marketing, personal finance, AI startups">
+      <div class="form-group" style="margin-bottom:0">
+        <label for="industrySelect">Select your industry</label>
+        <select id="industrySelect" onchange="goToIndustry()">
+          <option value="">Choose an industry...</option>
+          <option value="content-marketing-copywriting">Content Marketing & Copywriting</option>
+          <option value="it-services">IT Services</option>
+          <option value="software-development">Software Development</option>
+          <option value="technology-internet">Technology & Internet</option>
+          <option value="business-consulting">Business Consulting</option>
+          <option value="finance">Finance</option>
+          <option value="marketing">Marketing</option>
+          <option value="advertising">Advertising</option>
+          <option value="education">Education</option>
+          <option value="higher-education">Higher Education</option>
+          <option value="human-resources">Human Resources</option>
+          <option value="entrepreneurship-startups">Entrepreneurship & Startups</option>
+          <option value="sales-business-development">Sales & Business Development</option>
+          <option value="venture-capital-investing">Venture Capital & Investing</option>
+          <option value="executive-coaching-leadership">Executive Coaching & Leadership</option>
+          <option value="artificial-intelligence">Artificial Intelligence</option>
+          <option value="healthcare-healthtech">Healthcare & Health Tech</option>
+          <option value="real-estate">Real Estate</option>
+          <option value="ecommerce">E-commerce & DTC</option>
+          <option value="sustainability-clean-energy">Sustainability & Clean Energy</option>
+          <option value="recruitment-talent-acquisition">Recruitment & Talent Acquisition</option>
+          <option value="product-management">Product Management</option>
+          <option value="public-relations-communications">Public Relations & Communications</option>
+          <option value="supply-chain-logistics">Supply Chain & Logistics</option>
+          <option value="cybersecurity">Cybersecurity</option>
+          <option value="legal-legaltech">Legal & Legal Tech</option>
+          <option value="management-consulting">Management Consulting</option>
+          <option value="nonprofit-social-impact">Nonprofit & Social Impact</option>
+          <option value="design-ux-creative">Design, UX & Creative</option>
+        </select>
       </div>
-      <div class="form-row">
+    </div>
+    <p style="text-align:center;margin-top:0.75rem"><a href="#customSearch" onclick="showCustomSearch()" style="color:var(--accent);font-size:0.88rem;font-weight:500;text-decoration:none">Don't see your industry? Search any niche &rarr;</a></p>
+
+    <!-- Hidden custom search -->
+    <div id="customSearchSection" style="display:none; margin-top:1.25rem">
+      <div class="card">
         <div class="form-group">
-          <label for="role">Your role (optional)</label>
-          <input type="text" id="role" placeholder="e.g. Head of Growth">
+          <label for="niche">Niche *</label>
+          <input type="text" id="niche" placeholder="e.g. B2B SaaS marketing, personal finance, AI startups">
         </div>
         <div class="form-group">
           <label for="goal">What you want to be known for *</label>
           <input type="text" id="goal" placeholder="e.g. GTM strategies for early-stage founders">
         </div>
-      </div>
-      <div class="btn-row">
-        <button class="btn-primary" id="findBtn" onclick="findInfluencers()">Find influencers</button>
-        <button class="btn-secondary" onclick="clearAll()">Clear</button>
+        <input type="hidden" id="role" value="">
+        <div class="btn-row">
+          <button class="btn-primary" id="findBtn" onclick="findInfluencers()">Find influencers</button>
+          <button class="btn-secondary" onclick="clearAll()">Clear</button>
+        </div>
       </div>
     </div>
   </div>
@@ -381,6 +434,16 @@ const COLORS = ['#1a56db','#7c3aed','#dc2626','#ea580c','#0d9488','#c026d3'];
 let currentProfiles = [];
 let currentPosts = [];
 let currentIdeas = [];
+
+function goToIndustry() {
+  const slug = document.getElementById('industrySelect').value;
+  if (slug) window.location.href = `/industries.html?industry=${slug}`;
+}
+
+function showCustomSearch() {
+  document.getElementById('customSearchSection').style.display = 'block';
+  document.getElementById('niche').focus();
+}
 
 function showError(msg) { const e = document.getElementById('error'); e.textContent = msg; e.classList.add('active'); }
 function hideError() { document.getElementById('error').classList.remove('active'); }
