@@ -638,62 +638,122 @@ app.post('/api/admin/enrich-industry', async (req, res) => {
 
     console.log(`Enriching ${rows.length} profiles for ${industry}`);
 
-    // Search in batches of 30
-    const batchSize = 30;
+    // Strategy: run a post search for this industry, then match authors to our list
+    // This gives us author data (titles, URLs, images) AND top posts — all for $0.25
+    const industryLabels = {
+      'content-marketing-copywriting': ['content marketing', 'copywriting', 'content strategy'],
+    };
+    const searchTerms = industryLabels[industry] || [industry.replace(/-/g, ' ')];
+
+    console.log(`Post search for: ${JSON.stringify(searchTerms)}`);
+    const postResults = await runApifyActor('harvestapi~linkedin-post-search', {
+      searchQueries: searchTerms,
+      maxPosts: 100,
+    }, 0.25).catch(e => { console.log('Post search failed:', e.message); return []; });
+
+    if (!Array.isArray(postResults) || postResults.length === 0) {
+      return res.json({ success: true, enriched: 0, posts: 0, total: rows.length, message: 'Post search returned no results' });
+    }
+
+    console.log(`Got ${postResults.length} posts. Matching authors to ${rows.length} names...`);
+
+    const sbUrl = process.env.SUPABASE_URL;
+    const sbKey = process.env.SUPABASE_ANON_KEY;
     let enriched = 0;
 
-    for (let i = 0; i < rows.length; i += batchSize) {
-      const batch = rows.slice(i, i + batchSize);
-      const names = batch.map(r => r.name);
-      const searchQuery = names.join(', ');
+    // Build a lookup of our names (lowercase) → row id
+    const nameMap = new Map();
+    for (const row of rows) {
+      nameMap.set(row.name.toLowerCase(), row.id);
+    }
 
-      console.log(`Batch ${Math.floor(i / batchSize) + 1}: searching ${batch.length} names`);
+    // Track which authors we've already matched (avoid duplicates)
+    const matchedIds = new Set();
 
-      const results = await runApifyActor('harvestapi~linkedin-profile-search', {
-        searchQuery,
-        maxItems: batch.length,
-        profileScraperMode: 'short',
-      }, 0.10).catch(e => {
-        console.log('Batch search failed:', e.message);
-        return [];
-      });
+    // Filter hiring posts
+    const hiringWords = /\b(hiring|we're looking for|job opening|job opportunity|apply now|join our team|we are hiring)\b/i;
 
-      if (!Array.isArray(results) || results.length === 0) continue;
+    for (const post of postResults) {
+      const author = post.author || {};
+      const authorName = (author.name || '').toLowerCase();
+      if (!authorName) continue;
 
-      // Match results back to our names
-      for (const row of batch) {
-        const nameLower = row.name.toLowerCase();
-        const match = results.find(r => {
-          const rName = (r.name || r.fullName || '').toLowerCase();
-          return rName === nameLower || rName.includes(nameLower) || nameLower.includes(rName);
-        });
-
-        if (match) {
-          // Update Supabase record via PATCH
-          const url = process.env.SUPABASE_URL;
-          const key = process.env.SUPABASE_ANON_KEY;
-          if (url && key) {
-            await fetch(`${url}/rest/v1/industry_influencers?id=eq.${row.id}`, {
-              method: 'PATCH',
-              headers: {
-                'apikey': key,
-                'Authorization': `Bearer ${key}`,
-                'Content-Type': 'application/json',
-                'Prefer': 'return=minimal',
-              },
-              body: JSON.stringify({
-                title: match.title || match.headline || match.position || match.description || '',
-                profile_url: match.linkedinUrl || match.url || match.profileUrl || (match.publicIdentifier ? `https://www.linkedin.com/in/${match.publicIdentifier}` : ''),
-                profile_image: match.profilePicture || match.avatar || match.img || '',
-              }),
-            });
-            enriched++;
+      // Try to match to our list
+      let matchedId = nameMap.get(authorName);
+      if (!matchedId) {
+        // Fuzzy: check if any of our names is contained in the author name or vice versa
+        for (const [name, id] of nameMap) {
+          if (authorName.includes(name) || name.includes(authorName)) {
+            matchedId = id;
+            break;
           }
         }
       }
+
+      // Enrich the matched profile (only first time we see them)
+      if (matchedId && !matchedIds.has(matchedId) && sbUrl && sbKey) {
+        matchedIds.add(matchedId);
+        const avatarObj = (author.avatar && typeof author.avatar === 'object') ? author.avatar : {};
+        await fetch(`${sbUrl}/rest/v1/industry_influencers?id=eq.${matchedId}`, {
+          method: 'PATCH',
+          headers: {
+            'apikey': sbKey,
+            'Authorization': `Bearer ${sbKey}`,
+            'Content-Type': 'application/json',
+            'Prefer': 'return=minimal',
+          },
+          body: JSON.stringify({
+            title: author.info || author.position || author.headline || author.description || '',
+            profile_url: author.linkedinUrl || author.url || (author.publicIdentifier ? `https://www.linkedin.com/in/${author.publicIdentifier}` : ''),
+            profile_image: avatarObj.url || '',
+          }),
+        });
+        enriched++;
+      }
     }
 
-    res.json({ success: true, enriched, total: rows.length });
+    // Save top posts to industry_posts table
+    let savedPosts = 0;
+    const topPosts = postResults
+      .filter(p => p && (p.text || p.postText || p.content) && !hiringWords.test(String(p.text || p.postText || p.content || '')))
+      .map(p => {
+        const eng = (p.engagement && typeof p.engagement === 'object') ? p.engagement : {};
+        const author = (p.author && typeof p.author === 'object') ? p.author : {};
+        const likes = Number(eng.likes || p.likesCount || 0);
+        const comments = Number(eng.comments || p.commentsCount || 0);
+        const reposts = Number(eng.shares || p.repostsCount || 0);
+        return {
+          authorName: author.name || p.authorName || '',
+          text: String(p.text || p.postText || p.content || '').slice(0, 500),
+          likes, comments, reposts,
+          engagement: likes + comments * 3 + reposts * 2,
+          postUrl: p.postUrl || p.linkedinUrl || p.url || '',
+        };
+      })
+      .filter(p => p.likes >= 100 || p.comments >= 30 || p.reposts >= 10)
+      .sort((a, b) => b.engagement - a.engagement)
+      .slice(0, 10);
+
+    if (sbUrl && sbKey) {
+      for (const post of topPosts) {
+        const result = await supabaseQuery('POST', 'industry_posts', {
+          body: {
+            industry,
+            author_name: post.authorName,
+            text: post.text,
+            likes: post.likes,
+            comments: post.comments,
+            reposts: post.reposts,
+            engagement: post.engagement,
+            post_url: post.postUrl,
+            created_at: new Date().toISOString(),
+          },
+        });
+        if (result) savedPosts++;
+      }
+    }
+
+    res.json({ success: true, enriched, posts: savedPosts, total: rows.length });
   } catch (err) {
     console.error('Enrich error:', err.message);
     res.status(500).json({ error: err.message });
