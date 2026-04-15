@@ -533,6 +533,91 @@ app.post('/api/influencers', async (req, res) => {
 });
 
 // =============================================
+// API: Get industry influencers (pre-built data)
+// =============================================
+app.get('/api/industry/:slug', async (req, res) => {
+  const { slug } = req.params;
+
+  try {
+    // Try to get from Supabase industry_influencers table
+    const profiles = await supabaseQuery('GET', 'industry_influencers', {
+      'industry': `eq.${slug}`,
+      'select': '*',
+      'order': 'total_engagement.desc',
+    });
+
+    if (!profiles || profiles.length === 0) {
+      return res.status(404).json({ error: 'This industry is coming soon. We\'re building the influencer list.' });
+    }
+
+    // Format profiles for the frontend
+    const formattedProfiles = profiles.map(p => ({
+      name: p.name,
+      title: p.title || '',
+      profileUrl: p.profile_url || '',
+      profileImage: p.profile_image || '',
+      totalEngagement: p.total_engagement || 0,
+    }));
+
+    // Try to get cached posts for this industry
+    const cachedPosts = await supabaseQuery('GET', 'industry_posts', {
+      'industry': `eq.${slug}`,
+      'select': '*',
+      'order': 'engagement.desc',
+      'limit': '5',
+    });
+
+    const formattedPosts = (cachedPosts || []).map(p => ({
+      authorName: p.author_name || '',
+      text: p.text || '',
+      likes: p.likes || 0,
+      comments: p.comments || 0,
+      reposts: p.reposts || 0,
+      postUrl: p.post_url || '',
+    }));
+
+    res.json({ profiles: formattedProfiles, posts: formattedPosts });
+
+  } catch (err) {
+    console.error('Industry endpoint error:', err.message);
+    res.status(500).json({ error: 'Something went wrong loading this industry.' });
+  }
+});
+
+// =============================================
+// API: Seed industry data (admin endpoint)
+// =============================================
+app.post('/api/admin/seed-industry', async (req, res) => {
+  const { industry, influencers } = req.body;
+  if (!industry || !Array.isArray(influencers)) {
+    return res.status(400).json({ error: 'industry and influencers[] required' });
+  }
+
+  try {
+    let saved = 0;
+    for (const person of influencers) {
+      const result = await supabaseQuery('POST', 'industry_influencers', {
+        body: {
+          industry,
+          name: person.name || '',
+          profile_url: person.profileUrl || person.profile_url || '',
+          title: person.title || '',
+          profile_image: person.profileImage || person.profile_image || '',
+          total_engagement: person.totalEngagement || person.total_engagement || 0,
+          created_at: new Date().toISOString(),
+        },
+      });
+      if (result) saved++;
+    }
+
+    res.json({ success: true, saved, total: influencers.length });
+  } catch (err) {
+    console.error('Seed error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// =============================================
 // API: Generate post ideas
 // =============================================
 app.post('/api/post-ideas', async (req, res) => {

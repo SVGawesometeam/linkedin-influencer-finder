@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>LinkedIn Influencer Finder</title>
+<title>Top LinkedIn Influencers by Industry</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Playfair+Display:ital,wght@0,600;0,700;1,600&display=swap" rel="stylesheet">
 <style>
@@ -62,9 +62,8 @@ h1 em { color: var(--accent); font-style: italic; }
 }
 
 label { font-size: 0.84rem; font-weight: 600; color: var(--text-secondary); display: block; margin-bottom: 0.4rem; }
-.hint { font-size: 0.78rem; color: var(--muted); margin-bottom: 0.6rem; }
 
-input, textarea {
+select {
   width: 100%;
   padding: 0.75rem 1rem;
   border: 1px solid var(--input-border);
@@ -74,14 +73,13 @@ input, textarea {
   background: #fff;
   color: var(--text);
   transition: all 0.2s;
+  cursor: pointer;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%237a8a9e' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 1rem center;
 }
-input::placeholder, textarea::placeholder { color: #b0bac8; }
-input:focus, textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(26,86,219,0.1); }
-textarea { resize: vertical; min-height: 70px; }
-
-.form-group { margin-bottom: 1.25rem; }
-.form-group:last-child { margin-bottom: 0; }
-.form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(26,86,219,0.1); }
 
 button {
   padding: 0.75rem 1.75rem;
@@ -102,31 +100,28 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 .btn-sm { padding: 0.5rem 1rem; font-size: 0.82rem; }
 .btn-row { display: flex; gap: 0.75rem; margin-top: 1.25rem; flex-wrap: wrap; }
 
-/* Status bar */
-.status-bar {
-  text-align: center;
-  padding: 2.5rem 1rem;
-  display: none;
+.back-link {
+  display: inline-block;
+  color: var(--accent);
+  text-decoration: none;
+  font-size: 0.88rem;
+  font-weight: 500;
+  margin-bottom: 1.5rem;
 }
-.status-bar.active { display: block; }
-
-.status-steps { display: flex; justify-content: center; gap: 0.5rem; margin-bottom: 1.5rem; }
-.status-step {
-  width: 8px; height: 8px;
-  border-radius: 50%;
-  background: #d1d9e6;
-  transition: all 0.3s;
-}
-.status-step.active { background: var(--accent); transform: scale(1.3); }
-.status-step.done { background: #16a34a; }
-
-.status-text { color: var(--muted); font-size: 0.9rem; }
-.status-text strong { color: var(--text); }
+.back-link:hover { text-decoration: underline; }
 
 .error { background: #fef2f2; border: 1px solid #fecaca; color: #b91c1c; padding: 0.85rem 1rem; border-radius: var(--radius-sm); margin-bottom: 1rem; display: none; font-size: 0.88rem; }
 .error.active { display: block; }
 
-/* Influencer grid */
+.loading {
+  text-align: center;
+  padding: 3rem 1rem;
+  color: var(--muted);
+  font-size: 0.92rem;
+  display: none;
+}
+.loading.active { display: block; }
+
 .section-title { font-size: 1.25rem; font-weight: 700; margin: 2rem 0 1rem; }
 .section-sub { color: var(--muted); font-size: 0.88rem; margin-top: -0.75rem; margin-bottom: 1rem; }
 
@@ -150,15 +145,8 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 .inf-card:hover { box-shadow: var(--shadow-md); transform: translateY(-2px); }
 
 .inf-header { display: flex; align-items: center; gap: 0.75rem; }
-.inf-avatar {
-  width: 42px; height: 42px;
-  border-radius: 50%;
-  display: flex; align-items: center; justify-content: center;
-  color: #fff; font-weight: 700; font-size: 0.9rem; flex-shrink: 0;
-}
 .inf-name { font-weight: 600; font-size: 0.92rem; }
 .inf-title { font-size: 0.78rem; color: var(--muted); }
-.inf-followers { font-size: 0.78rem; color: var(--accent); font-weight: 600; }
 
 .inf-link {
   font-size: 0.82rem;
@@ -169,7 +157,7 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 }
 .inf-link:hover { text-decoration: underline; }
 
-/* Top posts */
+/* Post styles */
 .post-list { display: flex; flex-direction: column; gap: 0.75rem; }
 
 .post-card {
@@ -198,7 +186,7 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 .post-link { font-size: 0.8rem; color: var(--accent); text-decoration: none; }
 .post-link:hover { text-decoration: underline; }
 
-/* Post ideas */
+/* Idea cards */
 .idea-card {
   background: var(--card);
   border: 1px solid var(--border);
@@ -225,18 +213,6 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 .idea-ref a { color: var(--accent); text-decoration: none; }
 .idea-ref a:hover { text-decoration: underline; }
 
-/* Cache badge */
-.cache-badge {
-  display: inline-block;
-  font-size: 0.75rem;
-  font-weight: 500;
-  padding: 0.2rem 0.6rem;
-  border-radius: 999px;
-  background: #f0fdf4;
-  color: #16a34a;
-  margin-left: 0.5rem;
-}
-
 /* Draft section */
 .draft-section { margin-top: 2rem; }
 .draft-output {
@@ -251,7 +227,24 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   margin-top: 1rem;
 }
 
-/* Toast */
+input, textarea {
+  width: 100%;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--input-border);
+  border-radius: var(--radius-sm);
+  font-size: 0.92rem;
+  font-family: inherit;
+  background: #fff;
+  color: var(--text);
+  transition: all 0.2s;
+}
+input::placeholder, textarea::placeholder { color: #b0bac8; }
+input:focus, textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(26,86,219,0.1); }
+textarea { resize: vertical; min-height: 70px; }
+
+.hint { font-size: 0.78rem; color: var(--muted); margin-bottom: 0.6rem; }
+.form-group { margin-bottom: 1.25rem; }
+
 .toast {
   position: fixed; bottom: 2rem; right: 2rem;
   background: var(--text); color: #fff;
@@ -261,68 +254,90 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 }
 .toast.show { opacity: 1; transform: translateY(0); }
 
+.industry-count {
+  display: inline-block;
+  background: var(--accent-light);
+  color: var(--accent);
+  font-size: 0.82rem;
+  font-weight: 600;
+  padding: 0.25rem 0.75rem;
+  border-radius: 999px;
+  margin-top: 0.5rem;
+}
+
 @media (max-width: 640px) {
   .container { padding: 1.5rem 1rem; }
   h1 { font-size: 1.65rem; }
-  .form-row { grid-template-columns: 1fr; }
   .influencer-grid { grid-template-columns: 1fr; }
 }
 </style>
 </head>
 <body>
 <div class="container">
+  <a class="back-link" href="/">&larr; Back to custom search</a>
+
   <div class="header">
-    <h1>Find <em>Real</em> LinkedIn Influencers in Your Niche</h1>
-    <p class="subtitle">We scrape actual profiles and posts to find who's getting engagement right now.</p>
-    <p style="margin-top:0.75rem"><a href="/industries.html" style="color:var(--accent);font-size:0.88rem;font-weight:500;text-decoration:none">Or browse pre-built lists for 30 industries &rarr;</a></p>
+    <h1>Top LinkedIn Voices by <em>Industry</em></h1>
+    <p class="subtitle">Pre-curated lists of the most influential LinkedIn creators in 30 industries.</p>
   </div>
 
   <div class="error" id="error"></div>
 
-  <!-- Input form -->
-  <div class="narrow" id="formSection">
+  <div class="narrow">
     <div class="card">
-      <div class="form-group">
-        <label for="niche">Niche *</label>
-        <input type="text" id="niche" placeholder="e.g. B2B SaaS marketing, personal finance, AI startups">
-      </div>
-      <div class="form-row">
-        <div class="form-group">
-          <label for="role">Your role (optional)</label>
-          <input type="text" id="role" placeholder="e.g. Head of Growth">
-        </div>
-        <div class="form-group">
-          <label for="goal">What you want to be known for *</label>
-          <input type="text" id="goal" placeholder="e.g. GTM strategies for early-stage founders">
-        </div>
-      </div>
-      <div class="btn-row">
-        <button class="btn-primary" id="findBtn" onclick="findInfluencers()">Find influencers</button>
-        <button class="btn-secondary" onclick="clearAll()">Clear</button>
+      <div class="form-group" style="margin-bottom:0">
+        <label for="industrySelect">Select your industry</label>
+        <select id="industrySelect" onchange="loadIndustry()">
+          <option value="">Choose an industry...</option>
+          <option value="content-marketing-copywriting">Content Marketing & Copywriting</option>
+          <option value="it-services">IT Services</option>
+          <option value="software-development">Software Development</option>
+          <option value="technology-internet">Technology & Internet</option>
+          <option value="business-consulting">Business Consulting</option>
+          <option value="finance">Finance</option>
+          <option value="marketing">Marketing</option>
+          <option value="advertising">Advertising</option>
+          <option value="education">Education</option>
+          <option value="higher-education">Higher Education</option>
+          <option value="human-resources">Human Resources</option>
+          <option value="entrepreneurship-startups">Entrepreneurship & Startups</option>
+          <option value="sales-business-development">Sales & Business Development</option>
+          <option value="venture-capital-investing">Venture Capital & Investing</option>
+          <option value="executive-coaching-leadership">Executive Coaching & Leadership</option>
+          <option value="artificial-intelligence">Artificial Intelligence</option>
+          <option value="healthcare-healthtech">Healthcare & Health Tech</option>
+          <option value="real-estate">Real Estate</option>
+          <option value="ecommerce">E-commerce & DTC</option>
+          <option value="sustainability-clean-energy">Sustainability & Clean Energy</option>
+          <option value="recruitment-talent-acquisition">Recruitment & Talent Acquisition</option>
+          <option value="product-management">Product Management</option>
+          <option value="public-relations-communications">Public Relations & Communications</option>
+          <option value="supply-chain-logistics">Supply Chain & Logistics</option>
+          <option value="cybersecurity">Cybersecurity</option>
+          <option value="legal-legaltech">Legal & Legal Tech</option>
+          <option value="management-consulting">Management Consulting</option>
+          <option value="nonprofit-social-impact">Nonprofit & Social Impact</option>
+          <option value="design-ux-creative">Design, UX & Creative</option>
+        </select>
       </div>
     </div>
   </div>
 
-  <!-- Status bar -->
-  <div class="status-bar" id="statusBar">
-    <div class="status-steps">
-      <div class="status-step" id="step1"></div>
-      <div class="status-step" id="step2"></div>
-      <div class="status-step" id="step3"></div>
-    </div>
-    <div class="status-text" id="statusText">Starting search...</div>
+  <div class="loading" id="loading">
+    <p>Loading influencers for this industry...</p>
   </div>
 
   <!-- Results -->
   <div id="results" style="display:none">
-
-    <h2 class="section-title">Top Influencers</h2>
-    <p class="section-sub">Ranked by engagement across their posts. Real LinkedIn data.</p>
+    <h2 class="section-title" id="resultsTitle">Top Influencers</h2>
+    <p class="section-sub" id="resultsSub">Pre-curated list of top voices. Real LinkedIn data.</p>
     <div class="influencer-grid" id="influencerGrid"></div>
 
-    <h2 class="section-title" style="margin-top:2.5rem">Top Posts by Engagement</h2>
-    <p class="section-sub">The highest-performing posts from these influencers.</p>
-    <div class="post-list" id="postList"></div>
+    <div id="postsSection" style="display:none">
+      <h2 class="section-title" style="margin-top:2.5rem">Top Posts by Engagement</h2>
+      <p class="section-sub">The highest-performing posts from these influencers.</p>
+      <div class="post-list" id="postList"></div>
+    </div>
 
     <!-- Generate ideas button -->
     <div style="text-align:center; margin:2rem 0">
@@ -333,7 +348,7 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 
     <div id="ideasSection" style="display:none">
       <h2 class="section-title">Post Ideas for You</h2>
-      <p class="section-sub">Each idea is inspired by a real top-performing post in your niche.</p>
+      <p class="section-sub">Each idea is inspired by a real top-performing post in this industry.</p>
       <div class="post-list" id="ideasList"></div>
 
       <!-- Draft section -->
@@ -350,13 +365,13 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
           <div class="form-group">
             <label for="draftContext">What do you want to write about?</label>
             <p class="hint">Add specific context, a personal story, data points, or an angle you want the post to focus on.</p>
-            <textarea id="draftContext" rows="3" placeholder="e.g. I just helped a client automate their outreach and it 3x'd their reply rate in 2 weeks. I want to share what we did differently."></textarea>
+            <textarea id="draftContext" rows="3" placeholder="e.g. I just helped a client automate their outreach and it 3x'd their reply rate in 2 weeks."></textarea>
           </div>
 
           <div class="form-group">
             <label for="toneOfVoice">Your tone of voice</label>
             <p class="hint">Describe your writing style or paste a sample of your writing and we'll analyze it.</p>
-            <textarea id="toneOfVoice" rows="3" placeholder="e.g. Conversational, short punchy sentences. I use real numbers and examples. No fluff, no emojis. Or paste a sample of your writing here..."></textarea>
+            <textarea id="toneOfVoice" rows="3" placeholder="e.g. Conversational, short punchy sentences. I use real numbers and examples. No fluff, no emojis."></textarea>
             <div class="btn-row" style="margin-top:0.5rem">
               <button class="btn-secondary btn-sm" id="analyzeToneBtn" onclick="analyzeTone()">Analyze my writing style</button>
               <span class="hint" id="toneStatus" style="line-height:2.2"></span>
@@ -377,91 +392,62 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 </div>
 
 <script>
-const COLORS = ['#1a56db','#7c3aed','#dc2626','#ea580c','#0d9488','#c026d3'];
 let currentProfiles = [];
 let currentPosts = [];
 let currentIdeas = [];
+let currentIndustry = '';
 
 function showError(msg) { const e = document.getElementById('error'); e.textContent = msg; e.classList.add('active'); }
 function hideError() { document.getElementById('error').classList.remove('active'); }
 function showToast(msg) { const t = document.getElementById('toast'); t.textContent = msg; t.classList.add('show'); setTimeout(() => t.classList.remove('show'), 2500); }
 function esc(s) { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
 
-function setStatus(step, text) {
-  document.getElementById('statusBar').classList.add('active');
-  document.getElementById('statusText').innerHTML = text;
-  for (let i = 1; i <= 3; i++) {
-    const el = document.getElementById('step' + i);
-    el.className = 'status-step';
-    if (i < step) el.classList.add('done');
-    if (i === step) el.classList.add('active');
+function formatNum(n) {
+  n = Number(n) || 0;
+  if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
+  if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
+  return String(n);
+}
+
+async function loadIndustry() {
+  const select = document.getElementById('industrySelect');
+  const slug = select.value;
+  if (!slug) {
+    document.getElementById('results').style.display = 'none';
+    return;
   }
-}
 
-function clearAll() {
-  document.getElementById('niche').value = '';
-  document.getElementById('role').value = '';
-  document.getElementById('goal').value = '';
-  document.getElementById('results').style.display = 'none';
-  document.getElementById('statusBar').classList.remove('active');
+  currentIndustry = select.options[select.selectedIndex].text;
   hideError();
-}
-
-async function findInfluencers() {
-  const niche = document.getElementById('niche').value.trim();
-  const role = document.getElementById('role').value.trim();
-  const goal = document.getElementById('goal').value.trim();
-  if (!niche) { showError('Please enter a niche.'); return; }
-  if (!goal) { showError('Please enter what you want to be known for.'); return; }
-  hideError();
-
-  const btn = document.getElementById('findBtn');
-  btn.disabled = true;
   document.getElementById('results').style.display = 'none';
   document.getElementById('ideasSection').style.display = 'none';
-
-  setStatus(1, '<strong>Searching for influencers</strong> in your niche... This may take 1-2 minutes.');
+  document.getElementById('loading').classList.add('active');
 
   try {
-    const res = await fetch('/api/influencers', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ niche, role, goal }),
-    });
-
+    const res = await fetch(`/api/industry/${slug}`);
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
-      throw new Error(data.error || 'Search failed');
+      throw new Error(data.error || 'Failed to load industry data');
     }
 
     const data = await res.json();
     currentProfiles = data.profiles || [];
     currentPosts = data.posts || [];
 
+    document.getElementById('resultsTitle').textContent = `Top Voices in ${currentIndustry}`;
+    document.getElementById('resultsSub').textContent = `${currentProfiles.length} pre-curated influencers. Real LinkedIn data.`;
+
     renderProfiles();
     renderPosts();
 
-    document.getElementById('statusBar').classList.remove('active');
+    document.getElementById('loading').classList.remove('active');
     document.getElementById('results').style.display = 'block';
     document.getElementById('results').scrollIntoView({ behavior: 'smooth' });
 
   } catch (e) {
+    document.getElementById('loading').classList.remove('active');
     showError(e.message);
-    document.getElementById('statusBar').classList.remove('active');
-  } finally {
-    btn.disabled = false;
   }
-}
-
-function getInitials(name) {
-  return (name || '?').split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
-}
-
-function formatNum(n) {
-  n = Number(n) || 0;
-  if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
-  if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
-  return String(n);
 }
 
 function renderProfiles() {
@@ -477,21 +463,22 @@ function renderProfiles() {
         ${imgHtml}
         <div>
           <div class="inf-name">${esc(p.name)}</div>
-          <div class="inf-title">${esc(p.title).slice(0, 100)}</div>
+          <div class="inf-title">${esc(p.title || '').slice(0, 100)}</div>
         </div>
       </div>
-      <a class="inf-link" href="${esc(p.profileUrl)}" target="_blank" rel="noopener">View profile &rarr;</a>
-    </div>
-  `;
+      ${p.profileUrl ? `<a class="inf-link" href="${esc(p.profileUrl)}" target="_blank" rel="noopener">View profile &rarr;</a>` : ''}
+    </div>`;
   }).join('');
 }
 
 function renderPosts() {
+  const section = document.getElementById('postsSection');
   const list = document.getElementById('postList');
-  if (currentPosts.length === 0) {
-    list.innerHTML = '<div class="card" style="text-align:center;color:var(--muted)">No posts scraped yet. Try a different niche or broader keywords.</div>';
+  if (!currentPosts || currentPosts.length === 0) {
+    section.style.display = 'none';
     return;
   }
+  section.style.display = 'block';
   list.innerHTML = currentPosts.slice(0, 5).map(p => `
     <div class="post-card">
       <div class="post-meta">
@@ -509,10 +496,6 @@ function renderPosts() {
 }
 
 async function generateIdeas() {
-  const niche = document.getElementById('niche').value.trim();
-  const role = document.getElementById('role').value.trim();
-  const goal = document.getElementById('goal').value.trim();
-
   const btn = document.getElementById('ideasBtn');
   btn.disabled = true;
   btn.textContent = 'Analyzing top posts and generating ideas...';
@@ -522,7 +505,9 @@ async function generateIdeas() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        niche, role, goal,
+        niche: currentIndustry,
+        role: '',
+        goal: currentIndustry,
         topPosts: currentPosts.slice(0, 5),
         profiles: currentProfiles.slice(0, 10),
       }),
@@ -619,9 +604,6 @@ async function draftPost() {
   document.getElementById('draftOutput').style.display = 'none';
   document.getElementById('draftActions').style.display = 'none';
 
-  const niche = document.getElementById('niche').value.trim();
-  const role = document.getElementById('role').value.trim();
-  const goal = document.getElementById('goal').value.trim();
   const draftContext = document.getElementById('draftContext').value.trim();
   const toneOfVoice = document.getElementById('toneOfVoice').value.trim();
 
@@ -631,9 +613,7 @@ async function draftPost() {
   }
 
   let userContent = `Write a LinkedIn post based on this idea:\nHook: ${idea.hook}\nFormat: ${idea.format}\nWhy it works: ${idea.why}`;
-  userContent += `\n\nAuthor context:\n- Niche: ${niche}`;
-  if (role) userContent += `\n- Role: ${role}`;
-  if (goal) userContent += `\n- Known for: ${goal}`;
+  userContent += `\n\nIndustry: ${currentIndustry}`;
   if (draftContext) userContent += `\n\nSpecific context for this post:\n${draftContext}`;
   userContent += '\n\nMake it engaging, authentic. Use line breaks for readability. Under 1500 characters.';
 
@@ -663,6 +643,17 @@ async function draftPost() {
 function copyDraft() {
   navigator.clipboard.writeText(document.getElementById('draftOutput').textContent)
     .then(() => showToast('Copied to clipboard!'));
+}
+
+// Check URL params for pre-selected industry
+const urlParams = new URLSearchParams(window.location.search);
+const preselect = urlParams.get('industry');
+if (preselect) {
+  const sel = document.getElementById('industrySelect');
+  if (sel.querySelector(`option[value="${preselect}"]`)) {
+    sel.value = preselect;
+    loadIndustry();
+  }
 }
 </script>
 </body>
