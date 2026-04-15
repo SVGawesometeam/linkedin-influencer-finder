@@ -618,6 +618,89 @@ app.post('/api/admin/seed-industry', async (req, res) => {
 });
 
 // =============================================
+// API: Enrich industry influencers with LinkedIn data
+// =============================================
+app.post('/api/admin/enrich-industry', async (req, res) => {
+  const { industry } = req.body;
+  if (!industry) return res.status(400).json({ error: 'industry required' });
+
+  try {
+    // Fetch all names for this industry
+    const rows = await supabaseQuery('GET', 'industry_influencers', {
+      'industry': `eq.${industry}`,
+      'select': 'id,name',
+      'order': 'id.asc',
+    });
+
+    if (!rows || rows.length === 0) {
+      return res.status(404).json({ error: 'No influencers found for this industry' });
+    }
+
+    console.log(`Enriching ${rows.length} profiles for ${industry}`);
+
+    // Search in batches of 30
+    const batchSize = 30;
+    let enriched = 0;
+
+    for (let i = 0; i < rows.length; i += batchSize) {
+      const batch = rows.slice(i, i + batchSize);
+      const names = batch.map(r => r.name);
+      const searchQuery = names.join(', ');
+
+      console.log(`Batch ${Math.floor(i / batchSize) + 1}: searching ${batch.length} names`);
+
+      const results = await runApifyActor('harvestapi~linkedin-profile-search', {
+        searchQuery,
+        maxItems: batch.length,
+        profileScraperMode: 'short',
+      }, 0.10).catch(e => {
+        console.log('Batch search failed:', e.message);
+        return [];
+      });
+
+      if (!Array.isArray(results) || results.length === 0) continue;
+
+      // Match results back to our names
+      for (const row of batch) {
+        const nameLower = row.name.toLowerCase();
+        const match = results.find(r => {
+          const rName = (r.name || r.fullName || '').toLowerCase();
+          return rName === nameLower || rName.includes(nameLower) || nameLower.includes(rName);
+        });
+
+        if (match) {
+          // Update Supabase record via PATCH
+          const url = process.env.SUPABASE_URL;
+          const key = process.env.SUPABASE_ANON_KEY;
+          if (url && key) {
+            await fetch(`${url}/rest/v1/industry_influencers?id=eq.${row.id}`, {
+              method: 'PATCH',
+              headers: {
+                'apikey': key,
+                'Authorization': `Bearer ${key}`,
+                'Content-Type': 'application/json',
+                'Prefer': 'return=minimal',
+              },
+              body: JSON.stringify({
+                title: match.title || match.headline || match.position || match.description || '',
+                profile_url: match.linkedinUrl || match.url || match.profileUrl || (match.publicIdentifier ? `https://www.linkedin.com/in/${match.publicIdentifier}` : ''),
+                profile_image: match.profilePicture || match.avatar || match.img || '',
+              }),
+            });
+            enriched++;
+          }
+        }
+      }
+    }
+
+    res.json({ success: true, enriched, total: rows.length });
+  } catch (err) {
+    console.error('Enrich error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// =============================================
 // API: Generate post ideas
 // =============================================
 app.post('/api/post-ideas', async (req, res) => {
