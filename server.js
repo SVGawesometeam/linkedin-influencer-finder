@@ -618,104 +618,123 @@ app.post('/api/admin/seed-industry', async (req, res) => {
 });
 
 // =============================================
-// API: Enrich industry influencers with LinkedIn data
+// API: Build/populate an industry from post search
 // =============================================
-app.post('/api/admin/enrich-industry', async (req, res) => {
+const INDUSTRY_KEYWORDS = {
+  'content-marketing-copywriting': ['content marketing', 'copywriting', 'content strategy'],
+  'it-services': ['IT services', 'managed IT', 'IT consulting'],
+  'software-development': ['software development', 'software engineering', 'coding best practices'],
+  'technology-internet': ['technology trends', 'tech innovation', 'digital transformation'],
+  'business-consulting': ['business consulting', 'business strategy', 'management consulting'],
+  'finance': ['finance', 'financial planning', 'corporate finance'],
+  'marketing': ['marketing strategy', 'digital marketing', 'brand marketing'],
+  'advertising': ['advertising', 'ad campaigns', 'media buying'],
+  'education': ['education', 'edtech', 'teaching innovation'],
+  'higher-education': ['higher education', 'university leadership', 'academic research'],
+  'human-resources': ['human resources', 'HR strategy', 'people operations'],
+  'entrepreneurship-startups': ['startup founder', 'entrepreneurship', 'startup growth'],
+  'sales-business-development': ['sales strategy', 'B2B sales', 'business development'],
+  'venture-capital-investing': ['venture capital', 'startup investing', 'VC insights'],
+  'executive-coaching-leadership': ['executive coaching', 'leadership development', 'leadership tips'],
+  'artificial-intelligence': ['artificial intelligence', 'AI trends', 'machine learning'],
+  'healthcare-healthtech': ['healthcare', 'health tech', 'digital health'],
+  'real-estate': ['real estate', 'commercial real estate', 'property investment'],
+  'ecommerce': ['ecommerce', 'DTC brands', 'online retail'],
+  'sustainability-clean-energy': ['sustainability', 'clean energy', 'ESG'],
+  'recruitment-talent-acquisition': ['recruitment', 'talent acquisition', 'hiring strategy'],
+  'product-management': ['product management', 'product strategy', 'product leadership'],
+  'public-relations-communications': ['public relations', 'PR strategy', 'corporate communications'],
+  'supply-chain-logistics': ['supply chain', 'logistics', 'operations management'],
+  'cybersecurity': ['cybersecurity', 'information security', 'cyber threats'],
+  'legal-legaltech': ['legal tech', 'law practice', 'legal innovation'],
+  'management-consulting': ['management consulting', 'strategy consulting', 'consulting insights'],
+  'nonprofit-social-impact': ['nonprofit', 'social impact', 'social enterprise'],
+  'design-ux-creative': ['UX design', 'product design', 'creative direction'],
+};
+
+app.post('/api/admin/build-industry', async (req, res) => {
   const { industry } = req.body;
-  if (!industry) return res.status(400).json({ error: 'industry required' });
+  if (!industry) return res.status(400).json({ error: 'industry slug required' });
+
+  const searchTerms = INDUSTRY_KEYWORDS[industry];
+  if (!searchTerms) return res.status(400).json({ error: `Unknown industry: ${industry}` });
 
   try {
-    // Fetch all names for this industry
-    const rows = await supabaseQuery('GET', 'industry_influencers', {
-      'industry': `eq.${industry}`,
-      'select': 'id,name',
-      'order': 'id.asc',
-    });
+    console.log(`Building industry "${industry}" with keywords: ${JSON.stringify(searchTerms)}`);
 
-    if (!rows || rows.length === 0) {
-      return res.status(404).json({ error: 'No influencers found for this industry' });
-    }
-
-    console.log(`Enriching ${rows.length} profiles for ${industry}`);
-
-    // Strategy: run a post search for this industry, then match authors to our list
-    // This gives us author data (titles, URLs, images) AND top posts — all for $0.25
-    const industryLabels = {
-      'content-marketing-copywriting': ['content marketing', 'copywriting', 'content strategy'],
-    };
-    const searchTerms = industryLabels[industry] || [industry.replace(/-/g, ' ')];
-
-    console.log(`Post search for: ${JSON.stringify(searchTerms)}`);
     const postResults = await runApifyActor('harvestapi~linkedin-post-search', {
       searchQueries: searchTerms,
       maxPosts: 100,
     }, 0.25).catch(e => { console.log('Post search failed:', e.message); return []; });
 
     if (!Array.isArray(postResults) || postResults.length === 0) {
-      return res.json({ success: true, enriched: 0, posts: 0, total: rows.length, message: 'Post search returned no results' });
+      return res.json({ success: false, profiles: 0, posts: 0, message: 'Post search returned no results' });
     }
 
-    console.log(`Got ${postResults.length} posts. Matching authors to ${rows.length} names...`);
-
-    const sbUrl = process.env.SUPABASE_URL;
-    const sbKey = process.env.SUPABASE_ANON_KEY;
-    let enriched = 0;
-
-    // Build a lookup of our names (lowercase) → row id
-    const nameMap = new Map();
-    for (const row of rows) {
-      nameMap.set(row.name.toLowerCase(), row.id);
-    }
-
-    // Track which authors we've already matched (avoid duplicates)
-    const matchedIds = new Set();
+    console.log(`Got ${postResults.length} posts for "${industry}"`);
 
     // Filter hiring posts
-    const hiringWords = /\b(hiring|we're looking for|job opening|job opportunity|apply now|join our team|we are hiring)\b/i;
+    const hiringWords = /\b(hiring|we're looking for|job opening|job opportunity|apply now|join our team|we are hiring|work from home job|urgent\s*hiring|remote job)\b/i;
+    const cleanPosts = postResults.filter(p => {
+      if (!p || typeof p !== 'object') return false;
+      const text = String(p.text || p.postText || p.content || '');
+      return !hiringWords.test(text);
+    });
 
-    for (const post of postResults) {
+    // Build engagement map — aggregate by author
+    const engagementMap = new Map();
+    for (const post of cleanPosts) {
       const author = post.author || {};
-      const authorName = (author.name || '').toLowerCase();
-      if (!authorName) continue;
+      const authorKey = author.publicIdentifier || author.universalName || author.name;
+      if (!authorKey) continue;
 
-      // Try to match to our list
-      let matchedId = nameMap.get(authorName);
-      if (!matchedId) {
-        // Fuzzy: check if any of our names is contained in the author name or vice versa
-        for (const [name, id] of nameMap) {
-          if (authorName.includes(name) || name.includes(authorName)) {
-            matchedId = id;
-            break;
-          }
-        }
-      }
-
-      // Enrich the matched profile (only first time we see them)
-      if (matchedId && !matchedIds.has(matchedId) && sbUrl && sbKey) {
-        matchedIds.add(matchedId);
+      if (!engagementMap.has(authorKey)) {
         const avatarObj = (author.avatar && typeof author.avatar === 'object') ? author.avatar : {};
-        await fetch(`${sbUrl}/rest/v1/industry_influencers?id=eq.${matchedId}`, {
-          method: 'PATCH',
-          headers: {
-            'apikey': sbKey,
-            'Authorization': `Bearer ${sbKey}`,
-            'Content-Type': 'application/json',
-            'Prefer': 'return=minimal',
-          },
-          body: JSON.stringify({
-            title: author.info || author.position || author.headline || author.description || '',
-            profile_url: author.linkedinUrl || author.url || (author.publicIdentifier ? `https://www.linkedin.com/in/${author.publicIdentifier}` : ''),
-            profile_image: avatarObj.url || '',
-          }),
+        engagementMap.set(authorKey, {
+          name: author.name || '',
+          title: author.info || author.position || author.headline || author.description || '',
+          profileUrl: author.linkedinUrl || author.url || (author.publicIdentifier ? `https://www.linkedin.com/in/${author.publicIdentifier}` : ''),
+          profileImage: avatarObj.url || '',
+          totalEngagement: 0,
+          postCount: 0,
         });
-        enriched++;
       }
+
+      const a = engagementMap.get(authorKey);
+      const eng = (post.engagement && typeof post.engagement === 'object') ? post.engagement : {};
+      const postEng = (Number(eng.likes) || 0) + (Number(eng.comments) || 0) * 3 + (Number(eng.shares) || 0) * 2;
+      a.totalEngagement += postEng;
+      a.postCount += 1;
     }
 
-    // Save top posts to industry_posts table
+    // Filter: 70+ engagement, sort by engagement
+    const topAuthors = Array.from(engagementMap.values())
+      .filter(a => a.name && a.profileUrl && a.totalEngagement >= 70)
+      .sort((a, b) => b.totalEngagement - a.totalEngagement);
+
+    console.log(`${topAuthors.length} authors with 70+ engagement for "${industry}"`);
+
+    // Save authors to industry_influencers
+    let savedProfiles = 0;
+    for (const author of topAuthors) {
+      const result = await supabaseQuery('POST', 'industry_influencers', {
+        body: {
+          industry,
+          name: author.name,
+          title: author.title,
+          profile_url: author.profileUrl,
+          profile_image: author.profileImage,
+          total_engagement: author.totalEngagement,
+          created_at: new Date().toISOString(),
+        },
+      });
+      if (result) savedProfiles++;
+    }
+
+    // Save top posts (all with strong engagement)
     let savedPosts = 0;
-    const topPosts = postResults
-      .filter(p => p && (p.text || p.postText || p.content) && !hiringWords.test(String(p.text || p.postText || p.content || '')))
+    const topPosts = cleanPosts
+      .filter(p => p && (p.text || p.postText || p.content))
       .map(p => {
         const eng = (p.engagement && typeof p.engagement === 'object') ? p.engagement : {};
         const author = (p.author && typeof p.author === 'object') ? p.author : {};
@@ -731,33 +750,128 @@ app.post('/api/admin/enrich-industry', async (req, res) => {
         };
       })
       .filter(p => p.likes >= 100 || p.comments >= 30 || p.reposts >= 10)
-      .sort((a, b) => b.engagement - a.engagement)
-      .slice(0, 10);
+      .sort((a, b) => b.engagement - a.engagement);
 
-    if (sbUrl && sbKey) {
-      for (const post of topPosts) {
-        const result = await supabaseQuery('POST', 'industry_posts', {
-          body: {
-            industry,
-            author_name: post.authorName,
-            text: post.text,
-            likes: post.likes,
-            comments: post.comments,
-            reposts: post.reposts,
-            engagement: post.engagement,
-            post_url: post.postUrl,
-            created_at: new Date().toISOString(),
-          },
-        });
-        if (result) savedPosts++;
-      }
+    for (const post of topPosts) {
+      const result = await supabaseQuery('POST', 'industry_posts', {
+        body: {
+          industry,
+          author_name: post.authorName,
+          text: post.text,
+          likes: post.likes,
+          comments: post.comments,
+          reposts: post.reposts,
+          engagement: post.engagement,
+          post_url: post.postUrl,
+          created_at: new Date().toISOString(),
+        },
+      });
+      if (result) savedPosts++;
     }
 
-    res.json({ success: true, enriched, posts: savedPosts, total: rows.length });
+    console.log(`Industry "${industry}" done: ${savedProfiles} profiles, ${savedPosts} posts`);
+    res.json({ success: true, profiles: savedProfiles, posts: savedPosts });
+
   } catch (err) {
-    console.error('Enrich error:', err.message);
+    console.error('Build industry error:', err.message);
     res.status(500).json({ error: err.message });
   }
+});
+
+// Batch: build multiple industries at once
+app.post('/api/admin/build-industries-batch', async (req, res) => {
+  const { industries } = req.body;
+  if (!Array.isArray(industries)) return res.status(400).json({ error: 'industries[] required' });
+
+  const results = {};
+  // Process 2 at a time to avoid overloading
+  for (let i = 0; i < industries.length; i += 2) {
+    const batch = industries.slice(i, i + 2);
+    const batchResults = await Promise.all(batch.map(async (slug) => {
+      try {
+        const searchTerms = INDUSTRY_KEYWORDS[slug];
+        if (!searchTerms) return { slug, error: 'Unknown industry' };
+
+        console.log(`[Batch] Building "${slug}"...`);
+        const postResults = await runApifyActor('harvestapi~linkedin-post-search', {
+          searchQueries: searchTerms,
+          maxPosts: 100,
+        }, 0.25).catch(e => []);
+
+        if (!Array.isArray(postResults) || postResults.length === 0) {
+          return { slug, profiles: 0, posts: 0 };
+        }
+
+        const hiringWords = /\b(hiring|we're looking for|job opening|job opportunity|apply now|join our team|we are hiring|work from home job|urgent\s*hiring|remote job)\b/i;
+        const cleanPosts = postResults.filter(p => {
+          if (!p || typeof p !== 'object') return false;
+          return !hiringWords.test(String(p.text || p.postText || p.content || ''));
+        });
+
+        const engagementMap = new Map();
+        for (const post of cleanPosts) {
+          const author = post.author || {};
+          const authorKey = author.publicIdentifier || author.universalName || author.name;
+          if (!authorKey) continue;
+
+          if (!engagementMap.has(authorKey)) {
+            const avatarObj = (author.avatar && typeof author.avatar === 'object') ? author.avatar : {};
+            engagementMap.set(authorKey, {
+              name: author.name || '',
+              title: author.info || author.position || author.headline || author.description || '',
+              profileUrl: author.linkedinUrl || author.url || (author.publicIdentifier ? `https://www.linkedin.com/in/${author.publicIdentifier}` : ''),
+              profileImage: avatarObj.url || '',
+              totalEngagement: 0,
+            });
+          }
+          const a = engagementMap.get(authorKey);
+          const eng = (post.engagement && typeof post.engagement === 'object') ? post.engagement : {};
+          a.totalEngagement += (Number(eng.likes) || 0) + (Number(eng.comments) || 0) * 3 + (Number(eng.shares) || 0) * 2;
+        }
+
+        const topAuthors = Array.from(engagementMap.values())
+          .filter(a => a.name && a.profileUrl && a.totalEngagement >= 70)
+          .sort((a, b) => b.totalEngagement - a.totalEngagement);
+
+        let savedProfiles = 0;
+        for (const author of topAuthors) {
+          const r = await supabaseQuery('POST', 'industry_influencers', {
+            body: { industry: slug, name: author.name, title: author.title, profile_url: author.profileUrl, profile_image: author.profileImage, total_engagement: author.totalEngagement, created_at: new Date().toISOString() },
+          });
+          if (r) savedProfiles++;
+        }
+
+        let savedPosts = 0;
+        const topPosts = cleanPosts
+          .filter(p => p && (p.text || p.postText || p.content))
+          .map(p => {
+            const eng = (p.engagement && typeof p.engagement === 'object') ? p.engagement : {};
+            const author = (p.author && typeof p.author === 'object') ? p.author : {};
+            const likes = Number(eng.likes || p.likesCount || 0);
+            const comments = Number(eng.comments || p.commentsCount || 0);
+            const reposts = Number(eng.shares || p.repostsCount || 0);
+            return { authorName: author.name || '', text: String(p.text || p.postText || p.content || '').slice(0, 500), likes, comments, reposts, engagement: likes + comments * 3 + reposts * 2, postUrl: p.postUrl || p.linkedinUrl || p.url || '' };
+          })
+          .filter(p => p.likes >= 100 || p.comments >= 30 || p.reposts >= 10)
+          .sort((a, b) => b.engagement - a.engagement);
+
+        for (const post of topPosts) {
+          const r = await supabaseQuery('POST', 'industry_posts', {
+            body: { industry: slug, author_name: post.authorName, text: post.text, likes: post.likes, comments: post.comments, reposts: post.reposts, engagement: post.engagement, post_url: post.postUrl, created_at: new Date().toISOString() },
+          });
+          if (r) savedPosts++;
+        }
+
+        return { slug, profiles: savedProfiles, posts: savedPosts };
+      } catch (e) {
+        return { slug, error: e.message };
+      }
+    }));
+
+    for (const r of batchResults) results[r.slug] = r;
+  }
+
+  res.json({ success: true, results });
 });
 
 // =============================================
