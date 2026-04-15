@@ -585,6 +585,83 @@ app.get('/api/industry/:slug', async (req, res) => {
 });
 
 // =============================================
+// API: Update industry profiles + add posts (admin)
+// =============================================
+app.post('/api/admin/update-profiles', async (req, res) => {
+  const { industry, profiles, posts } = req.body;
+  if (!industry) return res.status(400).json({ error: 'industry required' });
+
+  const sbUrl = process.env.SUPABASE_URL;
+  const sbKey = process.env.SUPABASE_ANON_KEY;
+  if (!sbUrl || !sbKey) return res.status(500).json({ error: 'Supabase not configured' });
+
+  let updatedProfiles = 0;
+  let addedProfiles = 0;
+  let addedPosts = 0;
+
+  // Update or add profiles
+  for (const p of (profiles || [])) {
+    if (!p.name) continue;
+
+    // Try to update existing record by name
+    const patchRes = await fetch(`${sbUrl}/rest/v1/industry_influencers?name=eq.${encodeURIComponent(p.name)}&industry=eq.${encodeURIComponent(industry)}`, {
+      method: 'PATCH',
+      headers: {
+        'apikey': sbKey,
+        'Authorization': `Bearer ${sbKey}`,
+        'Content-Type': 'application/json',
+        'Prefer': 'return=representation',
+      },
+      body: JSON.stringify({
+        title: p.title || '',
+        profile_url: p.profileUrl || '',
+        profile_image: p.profileImage || '',
+        total_engagement: p.totalEngagement || 0,
+      }),
+    });
+
+    const patchData = await patchRes.json().catch(() => []);
+    if (Array.isArray(patchData) && patchData.length > 0) {
+      updatedProfiles++;
+    } else {
+      // Not found — insert as new
+      const result = await supabaseQuery('POST', 'industry_influencers', {
+        body: {
+          industry,
+          name: p.name,
+          title: p.title || '',
+          profile_url: p.profileUrl || '',
+          profile_image: p.profileImage || '',
+          total_engagement: p.totalEngagement || 0,
+          created_at: new Date().toISOString(),
+        },
+      });
+      if (result) addedProfiles++;
+    }
+  }
+
+  // Add posts
+  for (const post of (posts || [])) {
+    const result = await supabaseQuery('POST', 'industry_posts', {
+      body: {
+        industry,
+        author_name: post.authorName || '',
+        text: post.text || '',
+        likes: post.likes || 0,
+        comments: post.comments || 0,
+        reposts: post.reposts || 0,
+        engagement: (post.likes || 0) + (post.comments || 0) * 3 + (post.reposts || 0) * 2,
+        post_url: post.postUrl || '',
+        created_at: new Date().toISOString(),
+      },
+    });
+    if (result) addedPosts++;
+  }
+
+  res.json({ success: true, updatedProfiles, addedProfiles, addedPosts });
+});
+
+// =============================================
 // API: Seed industry data (admin endpoint)
 // =============================================
 app.post('/api/admin/seed-industry', async (req, res) => {
