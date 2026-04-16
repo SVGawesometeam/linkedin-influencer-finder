@@ -392,10 +392,12 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 
           <div class="form-group">
             <label for="toneOfVoice">Your tone of voice</label>
-            <p class="hint">Describe your writing style or paste a sample of your writing and we'll analyze it.</p>
+            <p class="hint">Describe your writing style, paste a sample of your writing, or upload a Markdown file.</p>
             <textarea id="toneOfVoice" rows="3" placeholder="e.g. Conversational, short punchy sentences. I use real numbers and examples. No fluff, no emojis. Or paste a sample of your writing here..."></textarea>
-            <div class="btn-row" style="margin-top:0.5rem">
+            <div class="btn-row" style="margin-top:0.5rem; flex-wrap:wrap; gap:0.5rem">
               <button class="btn-secondary btn-sm" id="analyzeToneBtn" onclick="analyzeTone()">Analyze my writing style</button>
+              <button class="btn-secondary btn-sm" type="button" onclick="document.getElementById('toneFile').click()">Upload .md file</button>
+              <input type="file" id="toneFile" accept=".md,.markdown,.txt,text/markdown,text/plain" style="display:none" onchange="handleToneFile(event)">
               <span class="hint" id="toneStatus" style="line-height:2.2"></span>
             </div>
           </div>
@@ -629,6 +631,48 @@ function populateIdeaSelect() {
   sel.innerHTML = currentIdeas.map((idea, i) =>
     `<option value="${i}">${i + 1}. ${esc(idea.hook).slice(0, 80)}</option>`
   ).join('');
+}
+
+async function handleToneFile(event) {
+  const file = event.target.files && event.target.files[0];
+  if (!file) return;
+
+  const status = document.getElementById('toneStatus');
+  const textarea = document.getElementById('toneOfVoice');
+
+  // Basic size guard: 2 MB
+  if (file.size > 2 * 1024 * 1024) {
+    showError('File is too large. Please upload a file under 2 MB.');
+    event.target.value = '';
+    return;
+  }
+
+  status.textContent = `Reading ${file.name}...`;
+  hideError();
+
+  try {
+    const text = await file.text();
+    // Strip YAML front matter (--- ... ---) and collapse excessive blank lines
+    const cleaned = text
+      .replace(/^---[\s\S]*?---\s*/m, '')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+
+    if (cleaned.length < 50) {
+      showError('That file doesn\'t have enough text to analyze. Please include at least a few sentences.');
+      status.textContent = '';
+      event.target.value = '';
+      return;
+    }
+
+    textarea.value = cleaned;
+    status.textContent = `Loaded ${file.name} (${cleaned.length.toLocaleString()} chars). Click "Analyze my writing style" to extract your tone.`;
+  } catch (e) {
+    showError('Failed to read file: ' + e.message);
+    status.textContent = '';
+  } finally {
+    event.target.value = '';
+  }
 }
 
 async function analyzeTone() {
