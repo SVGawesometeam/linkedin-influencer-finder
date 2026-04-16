@@ -168,10 +168,11 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 
 .inf-header { display: flex; align-items: center; gap: 0.75rem; }
 .inf-avatar {
-  width: 42px; height: 42px;
+  width: 44px; height: 44px;
   border-radius: 50%;
   display: flex; align-items: center; justify-content: center;
-  color: #fff; font-weight: 700; font-size: 0.9rem; flex-shrink: 0;
+  color: #fff; font-weight: 700; font-size: 0.95rem; flex-shrink: 0;
+  letter-spacing: 0.02em;
 }
 .inf-name { font-weight: 600; font-size: 0.92rem; }
 .inf-title { font-size: 0.78rem; color: var(--muted); }
@@ -505,13 +506,32 @@ function formatNum(n) {
   return String(n);
 }
 
+function initials(name) {
+  if (!name) return '?';
+  const parts = String(name).trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return '?';
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
+
+function avatarColor(name) {
+  let hash = 0;
+  for (let i = 0; i < (name || '').length; i++) {
+    hash = ((hash << 5) - hash) + name.charCodeAt(i);
+    hash |= 0;
+  }
+  const hue = Math.abs(hash) % 360;
+  return `hsl(${hue}, 55%, 48%)`;
+}
+
 function renderProfiles() {
   const grid = document.getElementById('influencerGrid');
   grid.innerHTML = currentProfiles.map((p, i) => {
     const hasImage = p.profileImage && p.profileImage.startsWith('http');
+    const fallback = `<div class="inf-avatar" style="background:${avatarColor(p.name)}">${esc(initials(p.name))}</div>`;
     const imgHtml = hasImage
-      ? `<img src="${esc(p.profileImage)}" alt="" style="width:44px;height:44px;border-radius:50%;object-fit:cover;flex-shrink:0">`
-      : '';
+      ? `<img src="${esc(p.profileImage)}" alt="" style="width:44px;height:44px;border-radius:50%;object-fit:cover;flex-shrink:0" onerror="this.outerHTML='${fallback.replace(/'/g, "&#39;")}'">`
+      : fallback;
     return `
     <div class="inf-card">
       <div class="inf-header">
@@ -521,7 +541,7 @@ function renderProfiles() {
           <div class="inf-title">${esc(p.title).slice(0, 100)}</div>
         </div>
       </div>
-      <a class="inf-link" href="${esc(p.profileUrl)}" target="_blank" rel="noopener">View profile &rarr;</a>
+      ${p.profileUrl ? `<a class="inf-link" href="${esc(p.profileUrl)}" target="_blank" rel="noopener">View profile &rarr;</a>` : ''}
     </div>
   `;
   }).join('');

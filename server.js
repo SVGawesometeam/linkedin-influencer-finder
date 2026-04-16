@@ -591,26 +591,56 @@ app.get('/api/industry/:slug', async (req, res) => {
     const dedupedProfiles = Array.from(byName.values())
       .sort((a, b) => (b.total_engagement || 0) - (a.total_engagement || 0));
 
+    // Clean trailing "LinkedIn" markers from title/text (residue from docx links
+    // that were flattened into plain text during parsing).
+    const stripLinkedInTail = (s) => {
+      if (!s) return '';
+      let out = String(s);
+      // Remove trailing variants like " LinkedIn", " ( LinkedIn )", " | LinkedIn", ". LinkedIn"
+      out = out.replace(/[\s.,;:|]*\(?\s*LinkedIn\s*(?:Profile)?\s*\)?\s*$/i, '');
+      // Remove inline "( LinkedIn )" tokens that appear at end of sentences
+      out = out.replace(/\s*\(\s*LinkedIn\s*\)\s*$/i, '');
+      return out.trim();
+    };
+
     // Format profiles for the frontend
     const formattedProfiles = dedupedProfiles.map(p => ({
-      name: p.name,
-      title: p.title || '',
+      name: stripLinkedInTail(p.name),
+      title: stripLinkedInTail(p.title || ''),
       profileUrl: p.profile_url || '',
       profileImage: p.profile_image || '',
       totalEngagement: p.total_engagement || 0,
     }));
 
-    // Try to get cached posts for this industry
+    // Try to get cached posts for this industry. Fetch extra so we can dedupe
+    // by post text / URL (older scrapes inserted duplicate rows where one
+    // copy was missing the author name and post URL).
     const cachedPosts = await supabaseQuery('GET', 'industry_posts', {
       'industry': `eq.${slug}`,
       'select': '*',
       'order': 'engagement.desc',
-      'limit': '5',
+      'limit': '30',
     });
 
-    const formattedPosts = (cachedPosts || []).map(p => ({
-      authorName: p.author_name || '',
-      text: p.text || '',
+    // Dedupe: group by normalized post_url or first 80 chars of text. Prefer
+    // the row that has an author_name AND a post_url.
+    const byPostKey = new Map();
+    const scorePost = (p) => (p.author_name ? 2 : 0) + (p.post_url ? 2 : 0) + ((p.engagement || 0) / 1e9);
+    for (const p of (cachedPosts || [])) {
+      const key = (p.post_url && p.post_url.trim()) || (p.text || '').trim().slice(0, 80).toLowerCase();
+      if (!key) continue;
+      const existing = byPostKey.get(key);
+      if (!existing || scorePost(p) > scorePost(existing)) {
+        byPostKey.set(key, p);
+      }
+    }
+    const dedupedPosts = Array.from(byPostKey.values())
+      .sort((a, b) => (b.engagement || 0) - (a.engagement || 0))
+      .slice(0, 5);
+
+    const formattedPosts = dedupedPosts.map(p => ({
+      authorName: stripLinkedInTail(p.author_name || ''),
+      text: stripLinkedInTail(p.text || ''),
       likes: p.likes || 0,
       comments: p.comments || 0,
       reposts: p.reposts || 0,
