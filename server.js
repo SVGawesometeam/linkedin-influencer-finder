@@ -732,6 +732,21 @@ app.post('/api/admin/update-profiles', async (req, res) => {
 // =============================================
 // API: Dedupe industry (admin) — keeps highest-engagement row per name
 // =============================================
+// Admin: inspect raw rows for an industry (diagnostic)
+app.get('/api/admin/inspect/:slug', async (req, res) => {
+  const slug = req.params.slug;
+  try {
+    const profiles = await supabaseQuery('GET', 'industry_influencers', {
+      'industry': `eq.${slug}`,
+      'select': '*',
+      'order': 'name.asc',
+    });
+    res.json({ count: profiles?.length || 0, profiles: profiles || [] });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post('/api/admin/dedupe-industry', async (req, res) => {
   const { industry } = req.body;
   if (!industry) return res.status(400).json({ error: 'industry required' });
