@@ -557,9 +557,11 @@ app.get('/api/industry/:slug', async (req, res) => {
     const individualProfiles = profiles.filter(p => {
       const url = p.profile_url || '';
       if (companyUrlRe.test(url)) return false;
-      // Also filter rows where title is just a follower count (company-page signature)
+      // Filter rows where title is just a follower count (company-page signature)
       const title = (p.title || '').trim();
       if (/^\s*[\d,]+\s*(followers?|subscribers?)\s*$/i.test(title)) return false;
+      // Filter rows with no URL, no title, and no image (junk from failed scrapes)
+      if (!url && !title && !p.profile_image) return false;
       return true;
     });
 
