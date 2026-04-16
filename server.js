@@ -612,21 +612,24 @@ app.get('/api/industry/:slug', async (req, res) => {
       totalEngagement: p.total_engagement || 0,
     }));
 
-    // Try to get cached posts for this industry. Fetch extra so we can dedupe
-    // by post text / URL (older scrapes inserted duplicate rows where one
-    // copy was missing the author name and post URL).
+    // Try to get cached posts for this industry. Fetch a large window so we can
+    // dedupe properly — some posts have been refreshed with more accurate (and
+    // often lower) engagement stats, which would otherwise be pushed past a
+    // narrow top-N window.
     const cachedPosts = await supabaseQuery('GET', 'industry_posts', {
       'industry': `eq.${slug}`,
       'select': '*',
       'order': 'engagement.desc',
-      'limit': '30',
+      'limit': '200',
     });
 
     // Dedupe: group by text prefix (since old scrapes split the same post into
     // two rows — one with author+URL, one without). Fall back to post_url only
-    // when text is missing. Prefer rows that have both author_name and post_url.
+    // when text is missing. Prefer rows that have both author_name and post_url,
+    // and among those prefer the NEWEST row (highest id) — refresh-posts inserts
+    // fresh engagement data as new rows, so newer = more accurate stats.
     const byPostKey = new Map();
-    const scorePost = (p) => (p.author_name ? 2 : 0) + (p.post_url ? 2 : 0) + ((p.engagement || 0) / 1e9);
+    const scorePost = (p) => (p.author_name ? 1e6 : 0) + (p.post_url ? 1e6 : 0) + (p.id || 0);
     for (const p of (cachedPosts || [])) {
       const textKey = (p.text || '').trim().slice(0, 80).toLowerCase();
       const key = textKey || (p.post_url && p.post_url.trim()) || '';
