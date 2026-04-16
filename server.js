@@ -659,8 +659,7 @@ app.post('/api/admin/update-profiles', async (req, res) => {
     });
 
     if (existing && existing.length > 0) {
-      // Update ALL matching rows via PATCH (name + industry filter). This covers
-      // duplicates created by prior seed runs so the URL gets populated on every row.
+      // Try PATCH first — may no-op silently if RLS blocks UPDATE on anon key
       const patchRes = await fetch(
         `${sbUrl}/rest/v1/industry_influencers?name=eq.${encodeURIComponent(p.name)}&industry=eq.${encodeURIComponent(industry)}`,
         {
@@ -683,10 +682,49 @@ app.post('/api/admin/update-profiles', async (req, res) => {
       let rowsReturned = 0;
       try { rowsReturned = JSON.parse(patchText).length || 0; } catch (_) {}
       patchStatuses.push({ name: p.name, status: patchRes.status, rowsReturned, body: patchText.slice(0, 200) });
-      if (patchRes.ok) {
-        updatedProfiles += existing.length;
+
+      if (rowsReturned === existing.length) {
+        updatedProfiles += rowsReturned;
       } else {
-        patchFailures.push({ name: p.name, status: patchRes.status, body: patchText.slice(0, 200) });
+        // PATCH did nothing (RLS blocks UPDATE on anon key). Fall back:
+        // DELETE the stale rows and INSERT a fresh row with the correct URL.
+        // Preserve the best existing profile_image (so we don't lose Apify-scraped images).
+        const fullExisting = await supabaseQuery('GET', 'industry_influencers', {
+          'name': `eq.${p.name}`,
+          'industry': `eq.${industry}`,
+          'select': '*',
+        });
+        let existingImg = '';
+        let existingEng = 0;
+        for (const row of (fullExisting || [])) {
+          if (row.profile_image && !existingImg) existingImg = row.profile_image;
+          if ((row.total_engagement || 0) > existingEng) existingEng = row.total_engagement || 0;
+        }
+        let deletedN = 0;
+        for (const row of (fullExisting || [])) {
+          const delRes = await fetch(`${sbUrl}/rest/v1/industry_influencers?id=eq.${row.id}`, {
+            method: 'DELETE',
+            headers: { 'apikey': sbKey, 'Authorization': `Bearer ${sbKey}` },
+          });
+          if (delRes.ok) deletedN++;
+        }
+        const result = await supabaseQuery('POST', 'industry_influencers', {
+          body: {
+            industry,
+            name: p.name,
+            title: p.title || '',
+            profile_url: getUrl(p),
+            profile_image: getImg(p) || existingImg || '',
+            total_engagement: Math.max(getEng(p), existingEng),
+            created_at: new Date().toISOString(),
+          },
+        });
+        if (result) {
+          updatedProfiles += 1;
+          patchStatuses.push({ name: p.name, note: 'delete+insert', deletedN });
+        } else {
+          patchFailures.push({ name: p.name, status: 'delete+insert failed', deletedN });
+        }
       }
     } else {
       // Insert new row
