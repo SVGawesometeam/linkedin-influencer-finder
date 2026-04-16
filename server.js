@@ -685,7 +685,8 @@ app.post('/api/admin/rename-industry', async (req, res) => {
       headers,
       body: JSON.stringify({ industry: to }),
     });
-    const profData = await profRes.json().catch(() => []);
+    const profText = await profRes.text();
+    let profData; try { profData = JSON.parse(profText); } catch { profData = null; }
     const profilesRenamed = Array.isArray(profData) ? profData.length : 0;
 
     const postsRes = await fetch(`${sbUrl}/rest/v1/industry_posts?industry=eq.${encodeURIComponent(from)}`, {
@@ -693,10 +694,21 @@ app.post('/api/admin/rename-industry', async (req, res) => {
       headers,
       body: JSON.stringify({ industry: to }),
     });
-    const postsData = await postsRes.json().catch(() => []);
+    const postsText = await postsRes.text();
+    let postsData; try { postsData = JSON.parse(postsText); } catch { postsData = null; }
     const postsRenamed = Array.isArray(postsData) ? postsData.length : 0;
 
-    res.json({ success: true, profilesRenamed, postsRenamed });
+    res.json({
+      success: true,
+      profilesRenamed,
+      postsRenamed,
+      debug: {
+        profStatus: profRes.status,
+        postStatus: postsRes.status,
+        profBody: profText.slice(0, 500),
+        postBody: postsText.slice(0, 500),
+      },
+    });
   } catch (err) {
     console.error('Rename industry error:', err.message);
     res.status(500).json({ error: err.message });
