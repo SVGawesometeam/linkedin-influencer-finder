@@ -662,58 +662,63 @@ app.post('/api/admin/update-profiles', async (req, res) => {
 });
 
 // =============================================
-// API: Rename industry slug (admin)
+// API: Copy industry slug (admin) — inserts duplicate rows under new slug
 // =============================================
-app.post('/api/admin/rename-industry', async (req, res) => {
+app.post('/api/admin/copy-industry', async (req, res) => {
   const { from, to } = req.body;
   if (!from || !to) return res.status(400).json({ error: 'from and to required' });
 
-  const sbUrl = process.env.SUPABASE_URL;
-  const sbKey = process.env.SUPABASE_ANON_KEY;
-  if (!sbUrl || !sbKey) return res.status(500).json({ error: 'Supabase not configured' });
-
-  const headers = {
-    'apikey': sbKey,
-    'Authorization': `Bearer ${sbKey}`,
-    'Content-Type': 'application/json',
-    'Prefer': 'return=representation',
-  };
-
   try {
-    const profRes = await fetch(`${sbUrl}/rest/v1/industry_influencers?industry=eq.${encodeURIComponent(from)}`, {
-      method: 'PATCH',
-      headers,
-      body: JSON.stringify({ industry: to }),
+    const profiles = await supabaseQuery('GET', 'industry_influencers', {
+      'industry': `eq.${from}`,
+      'select': '*',
     });
-    const profText = await profRes.text();
-    let profData; try { profData = JSON.parse(profText); } catch { profData = null; }
-    const profilesRenamed = Array.isArray(profData) ? profData.length : 0;
+    const posts = await supabaseQuery('GET', 'industry_posts', {
+      'industry': `eq.${from}`,
+      'select': '*',
+    });
 
-    const postsRes = await fetch(`${sbUrl}/rest/v1/industry_posts?industry=eq.${encodeURIComponent(from)}`, {
-      method: 'PATCH',
-      headers,
-      body: JSON.stringify({ industry: to }),
-    });
-    const postsText = await postsRes.text();
-    let postsData; try { postsData = JSON.parse(postsText); } catch { postsData = null; }
-    const postsRenamed = Array.isArray(postsData) ? postsData.length : 0;
+    let copiedProfiles = 0;
+    for (const p of (profiles || [])) {
+      const r = await supabaseQuery('POST', 'industry_influencers', {
+        body: {
+          industry: to,
+          name: p.name,
+          title: p.title || '',
+          profile_url: p.profile_url || '',
+          profile_image: p.profile_image || '',
+          total_engagement: p.total_engagement || 0,
+          created_at: new Date().toISOString(),
+        },
+      });
+      if (r) copiedProfiles++;
+    }
 
-    res.json({
-      success: true,
-      profilesRenamed,
-      postsRenamed,
-      debug: {
-        profStatus: profRes.status,
-        postStatus: postsRes.status,
-        profBody: profText.slice(0, 500),
-        postBody: postsText.slice(0, 500),
-      },
-    });
+    let copiedPosts = 0;
+    for (const p of (posts || [])) {
+      const r = await supabaseQuery('POST', 'industry_posts', {
+        body: {
+          industry: to,
+          author_name: p.author_name || '',
+          text: p.text || '',
+          likes: p.likes || 0,
+          comments: p.comments || 0,
+          reposts: p.reposts || 0,
+          engagement: p.engagement || 0,
+          post_url: p.post_url || '',
+          created_at: new Date().toISOString(),
+        },
+      });
+      if (r) copiedPosts++;
+    }
+
+    res.json({ success: true, copiedProfiles, copiedPosts, sourceProfiles: profiles?.length || 0, sourcePosts: posts?.length || 0 });
   } catch (err) {
-    console.error('Rename industry error:', err.message);
+    console.error('Copy industry error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
+
 
 // =============================================
 // API: Seed industry data (admin endpoint)
