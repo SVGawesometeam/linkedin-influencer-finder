@@ -622,12 +622,14 @@ app.get('/api/industry/:slug', async (req, res) => {
       'limit': '30',
     });
 
-    // Dedupe: group by normalized post_url or first 80 chars of text. Prefer
-    // the row that has an author_name AND a post_url.
+    // Dedupe: group by text prefix (since old scrapes split the same post into
+    // two rows — one with author+URL, one without). Fall back to post_url only
+    // when text is missing. Prefer rows that have both author_name and post_url.
     const byPostKey = new Map();
     const scorePost = (p) => (p.author_name ? 2 : 0) + (p.post_url ? 2 : 0) + ((p.engagement || 0) / 1e9);
     for (const p of (cachedPosts || [])) {
-      const key = (p.post_url && p.post_url.trim()) || (p.text || '').trim().slice(0, 80).toLowerCase();
+      const textKey = (p.text || '').trim().slice(0, 80).toLowerCase();
+      const key = textKey || (p.post_url && p.post_url.trim()) || '';
       if (!key) continue;
       const existing = byPostKey.get(key);
       if (!existing || scorePost(p) > scorePost(existing)) {
