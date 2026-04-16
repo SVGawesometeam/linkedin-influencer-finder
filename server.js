@@ -662,6 +662,48 @@ app.post('/api/admin/update-profiles', async (req, res) => {
 });
 
 // =============================================
+// API: Rename industry slug (admin)
+// =============================================
+app.post('/api/admin/rename-industry', async (req, res) => {
+  const { from, to } = req.body;
+  if (!from || !to) return res.status(400).json({ error: 'from and to required' });
+
+  const sbUrl = process.env.SUPABASE_URL;
+  const sbKey = process.env.SUPABASE_ANON_KEY;
+  if (!sbUrl || !sbKey) return res.status(500).json({ error: 'Supabase not configured' });
+
+  const headers = {
+    'apikey': sbKey,
+    'Authorization': `Bearer ${sbKey}`,
+    'Content-Type': 'application/json',
+    'Prefer': 'return=representation',
+  };
+
+  try {
+    const profRes = await fetch(`${sbUrl}/rest/v1/industry_influencers?industry=eq.${encodeURIComponent(from)}`, {
+      method: 'PATCH',
+      headers,
+      body: JSON.stringify({ industry: to }),
+    });
+    const profData = await profRes.json().catch(() => []);
+    const profilesRenamed = Array.isArray(profData) ? profData.length : 0;
+
+    const postsRes = await fetch(`${sbUrl}/rest/v1/industry_posts?industry=eq.${encodeURIComponent(from)}`, {
+      method: 'PATCH',
+      headers,
+      body: JSON.stringify({ industry: to }),
+    });
+    const postsData = await postsRes.json().catch(() => []);
+    const postsRenamed = Array.isArray(postsData) ? postsData.length : 0;
+
+    res.json({ success: true, profilesRenamed, postsRenamed });
+  } catch (err) {
+    console.error('Rename industry error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// =============================================
 // API: Seed industry data (admin endpoint)
 // =============================================
 app.post('/api/admin/seed-industry', async (req, res) => {
@@ -698,7 +740,8 @@ app.post('/api/admin/seed-industry', async (req, res) => {
 // API: Build/populate an industry from post search
 // =============================================
 const INDUSTRY_KEYWORDS = {
-  'content-marketing-copywriting': ['content marketing', 'copywriting', 'content strategy'],
+  'content-marketing': ['content marketing', 'content strategy', 'content creation'],
+  'copywriting': ['copywriting', 'sales copy', 'conversion copywriting'],
   'it-services': ['IT services', 'managed IT', 'IT consulting'],
   'software-development': ['software development', 'software engineering', 'coding best practices'],
   'technology-internet': ['technology trends', 'tech innovation', 'digital transformation'],
