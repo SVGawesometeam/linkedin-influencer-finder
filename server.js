@@ -850,8 +850,7 @@ app.post('/api/admin/seed-industry', async (req, res) => {
 // API: Build/populate an industry from post search
 // =============================================
 const INDUSTRY_KEYWORDS = {
-  'content-marketing': ['content marketing', 'content strategy', 'content creation'],
-  'copywriting': ['copywriting', 'sales copy', 'conversion copywriting'],
+  'content-marketing-copywriting': ['content marketing', 'copywriting', 'content strategy'],
   'it-services': ['IT services', 'managed IT', 'IT consulting'],
   'software-development': ['software development', 'software engineering', 'coding best practices'],
   'technology-internet': ['technology trends', 'tech innovation', 'digital transformation'],
