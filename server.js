@@ -710,8 +710,15 @@ app.post('/api/admin/update-profiles', async (req, res) => {
           });
           if (delRes.ok) deletedN++;
         }
-        const result = await supabaseQuery('POST', 'industry_influencers', {
-          body: {
+        const insertRes = await fetch(`${sbUrl}/rest/v1/industry_influencers`, {
+          method: 'POST',
+          headers: {
+            'apikey': sbKey,
+            'Authorization': `Bearer ${sbKey}`,
+            'Content-Type': 'application/json',
+            'Prefer': 'return=representation',
+          },
+          body: JSON.stringify({
             industry,
             name: p.name,
             title: p.title || '',
@@ -719,13 +726,14 @@ app.post('/api/admin/update-profiles', async (req, res) => {
             profile_image: getImg(p) || existingImg || '',
             total_engagement: Math.max(getEng(p), existingEng),
             created_at: new Date().toISOString(),
-          },
+          }),
         });
-        if (result) {
+        const insertText = await insertRes.text();
+        if (insertRes.ok) {
           updatedProfiles += 1;
           patchStatuses.push({ name: p.name, note: 'delete+insert', deletedN });
         } else {
-          patchFailures.push({ name: p.name, status: 'delete+insert failed', deletedN });
+          patchFailures.push({ name: p.name, status: 'delete+insert failed', deletedN, insertStatus: insertRes.status, insertBody: insertText.slice(0, 300) });
         }
       }
     } else {
