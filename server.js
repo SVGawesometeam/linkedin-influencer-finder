@@ -669,6 +669,7 @@ app.post('/api/admin/update-profiles', async (req, res) => {
             'apikey': sbKey,
             'Authorization': `Bearer ${sbKey}`,
             'Content-Type': 'application/json',
+            'Prefer': 'return=representation',
           },
           body: JSON.stringify({
             title: p.title || '',
@@ -679,7 +680,9 @@ app.post('/api/admin/update-profiles', async (req, res) => {
         }
       );
       const patchText = await patchRes.text();
-      patchStatuses.push({ name: p.name, status: patchRes.status, body: patchText.slice(0, 200) });
+      let rowsReturned = 0;
+      try { rowsReturned = JSON.parse(patchText).length || 0; } catch (_) {}
+      patchStatuses.push({ name: p.name, status: patchRes.status, rowsReturned, body: patchText.slice(0, 200) });
       if (patchRes.ok) {
         updatedProfiles += existing.length;
       } else {
