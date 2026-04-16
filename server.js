@@ -637,6 +637,8 @@ app.post('/api/admin/update-profiles', async (req, res) => {
   let updatedProfiles = 0;
   let addedProfiles = 0;
   let addedPosts = 0;
+  let patchFailures = [];
+  let patchStatuses = [];
 
   // Helper: accept both camelCase and snake_case
   const getUrl = (p) => p.profileUrl || p.profile_url || '';
@@ -676,7 +678,13 @@ app.post('/api/admin/update-profiles', async (req, res) => {
           }),
         }
       );
-      if (patchRes.ok) updatedProfiles += existing.length;
+      const patchText = await patchRes.text();
+      patchStatuses.push({ name: p.name, status: patchRes.status, body: patchText.slice(0, 200) });
+      if (patchRes.ok) {
+        updatedProfiles += existing.length;
+      } else {
+        patchFailures.push({ name: p.name, status: patchRes.status, body: patchText.slice(0, 200) });
+      }
     } else {
       // Insert new row
       const result = await supabaseQuery('POST', 'industry_influencers', {
@@ -726,7 +734,7 @@ app.post('/api/admin/update-profiles', async (req, res) => {
     if (result) addedPosts++;
   }
 
-  res.json({ success: true, updatedProfiles, addedProfiles, addedPosts });
+  res.json({ success: true, updatedProfiles, addedProfiles, addedPosts, patchFailures: patchFailures.slice(0, 10), patchStatusSample: patchStatuses.slice(0, 3) });
 });
 
 // =============================================
