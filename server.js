@@ -550,8 +550,21 @@ app.get('/api/industry/:slug', async (req, res) => {
       return res.status(404).json({ error: 'This industry is coming soon. We\'re building the influencer list.' });
     }
 
+    // Deduplicate by name (case-insensitive), keep highest-engagement row
+    const byName = new Map();
+    for (const p of profiles) {
+      const key = (p.name || '').trim().toLowerCase();
+      if (!key) continue;
+      const existing = byName.get(key);
+      if (!existing || (p.total_engagement || 0) > (existing.total_engagement || 0)) {
+        byName.set(key, p);
+      }
+    }
+    const dedupedProfiles = Array.from(byName.values())
+      .sort((a, b) => (b.total_engagement || 0) - (a.total_engagement || 0));
+
     // Format profiles for the frontend
-    const formattedProfiles = profiles.map(p => ({
+    const formattedProfiles = dedupedProfiles.map(p => ({
       name: p.name,
       title: p.title || '',
       profileUrl: p.profile_url || '',
