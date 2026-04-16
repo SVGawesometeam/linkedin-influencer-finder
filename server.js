@@ -849,20 +849,32 @@ app.post('/api/admin/refresh-posts', async (req, res) => {
   if (!sbUrl || !sbKey) return res.status(500).json({ error: 'Supabase not configured' });
 
   try {
-    // Fetch posts to refresh (those with a post_url)
-    const posts = await supabaseQuery('GET', 'industry_posts', {
+    // Fetch top posts for this industry
+    const allPosts = await supabaseQuery('GET', 'industry_posts', {
       'industry': `eq.${industry}`,
-      'post_url': 'not.is.null',
       'select': '*',
       'order': 'engagement.desc',
-      'limit': String(limit || 10),
+      'limit': '50',
     });
 
-    if (!posts || posts.length === 0) {
-      return res.json({ success: false, reason: 'no posts with URLs' });
+    if (!allPosts || allPosts.length === 0) {
+      return res.json({ success: false, reason: 'no posts for this industry' });
     }
 
-    const postUrls = posts.map(p => p.post_url).filter(u => u && /linkedin\.com/.test(u));
+    // Keep only those with a linkedin URL, dedupe by URL, cap at requested limit
+    const seen = new Set();
+    const posts = [];
+    for (const p of allPosts) {
+      const u = p.post_url || '';
+      if (!u || !/linkedin\.com/.test(u)) continue;
+      if (seen.has(u)) continue;
+      seen.add(u);
+      posts.push(p);
+      if (posts.length >= (limit || 10)) break;
+    }
+
+    if (posts.length === 0) return res.json({ success: false, reason: 'no posts with linkedin URLs' });
+    const postUrls = posts.map(p => p.post_url);
     if (postUrls.length === 0) return res.json({ success: false, reason: 'no valid linkedin urls' });
 
     const actorId = actor || 'harvestapi~linkedin-post';
