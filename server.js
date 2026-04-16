@@ -563,13 +563,26 @@ app.get('/api/industry/:slug', async (req, res) => {
       return true;
     });
 
-    // Deduplicate by name (case-insensitive), keep highest-engagement row
+    // Deduplicate by name (case-insensitive). Prefer rows that have a profile_url,
+    // and within that group keep the highest-engagement row.
     const byName = new Map();
+    const hasUrl = (p) => !!(p && p.profile_url && String(p.profile_url).startsWith('http'));
     for (const p of individualProfiles) {
       const key = (p.name || '').trim().toLowerCase();
       if (!key) continue;
       const existing = byName.get(key);
-      if (!existing || (p.total_engagement || 0) > (existing.total_engagement || 0)) {
+      if (!existing) {
+        byName.set(key, p);
+        continue;
+      }
+      // If only one side has a URL, keep that one
+      if (hasUrl(p) && !hasUrl(existing)) {
+        byName.set(key, p);
+        continue;
+      }
+      if (!hasUrl(p) && hasUrl(existing)) continue;
+      // Same URL-status: keep higher engagement
+      if ((p.total_engagement || 0) > (existing.total_engagement || 0)) {
         byName.set(key, p);
       }
     }
@@ -636,32 +649,34 @@ app.post('/api/admin/update-profiles', async (req, res) => {
   for (const p of (profiles || [])) {
     if (!p.name) continue;
 
-    // Check if row exists (GET)
+    // Check if row exists (GET) — get ALL matching rows so we update every duplicate
     const existing = await supabaseQuery('GET', 'industry_influencers', {
       'name': `eq.${p.name}`,
       'industry': `eq.${industry}`,
       'select': 'id',
-      'limit': '1',
     });
 
     if (existing && existing.length > 0) {
-      // Update via PATCH (no return representation needed)
-      const rowId = existing[0].id;
-      const patchRes = await fetch(`${sbUrl}/rest/v1/industry_influencers?id=eq.${rowId}`, {
-        method: 'PATCH',
-        headers: {
-          'apikey': sbKey,
-          'Authorization': `Bearer ${sbKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          title: p.title || '',
-          profile_url: getUrl(p),
-          profile_image: getImg(p),
-          total_engagement: getEng(p),
-        }),
-      });
-      if (patchRes.ok) updatedProfiles++;
+      // Update ALL matching rows via PATCH (name + industry filter). This covers
+      // duplicates created by prior seed runs so the URL gets populated on every row.
+      const patchRes = await fetch(
+        `${sbUrl}/rest/v1/industry_influencers?name=eq.${encodeURIComponent(p.name)}&industry=eq.${encodeURIComponent(industry)}`,
+        {
+          method: 'PATCH',
+          headers: {
+            'apikey': sbKey,
+            'Authorization': `Bearer ${sbKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            title: p.title || '',
+            profile_url: getUrl(p),
+            profile_image: getImg(p),
+            total_engagement: getEng(p),
+          }),
+        }
+      );
+      if (patchRes.ok) updatedProfiles += existing.length;
     } else {
       // Insert new row
       const result = await supabaseQuery('POST', 'industry_influencers', {
