@@ -550,9 +550,22 @@ app.get('/api/industry/:slug', async (req, res) => {
       return res.status(404).json({ error: 'This industry is coming soon. We\'re building the influencer list.' });
     }
 
+    // Filter out company/school/showcase pages — only show individual profiles
+    // An individual profile URL looks like linkedin.com/in/xxx
+    // Companies: /company/, /school/, /showcase/
+    const companyUrlRe = /linkedin\.com\/(company|school|showcase|pulse)\//i;
+    const individualProfiles = profiles.filter(p => {
+      const url = p.profile_url || '';
+      if (companyUrlRe.test(url)) return false;
+      // Also filter rows where title is just a follower count (company-page signature)
+      const title = (p.title || '').trim();
+      if (/^\s*[\d,]+\s*(followers?|subscribers?)\s*$/i.test(title)) return false;
+      return true;
+    });
+
     // Deduplicate by name (case-insensitive), keep highest-engagement row
     const byName = new Map();
-    for (const p of profiles) {
+    for (const p of individualProfiles) {
       const key = (p.name || '').trim().toLowerCase();
       if (!key) continue;
       const existing = byName.get(key);
@@ -612,40 +625,53 @@ app.post('/api/admin/update-profiles', async (req, res) => {
   let addedProfiles = 0;
   let addedPosts = 0;
 
+  // Helper: accept both camelCase and snake_case
+  const getUrl = (p) => p.profileUrl || p.profile_url || '';
+  const getImg = (p) => p.profileImage || p.profile_image || '';
+  const getEng = (p) => p.totalEngagement || p.total_engagement || 0;
+  const getPostUrl = (p) => p.postUrl || p.post_url || '';
+  const getAuthor = (p) => p.authorName || p.author_name || '';
+
   // Update or add profiles
   for (const p of (profiles || [])) {
     if (!p.name) continue;
 
-    // Try to update existing record by name
-    const patchRes = await fetch(`${sbUrl}/rest/v1/industry_influencers?name=eq.${encodeURIComponent(p.name)}&industry=eq.${encodeURIComponent(industry)}`, {
-      method: 'PATCH',
-      headers: {
-        'apikey': sbKey,
-        'Authorization': `Bearer ${sbKey}`,
-        'Content-Type': 'application/json',
-        'Prefer': 'return=representation',
-      },
-      body: JSON.stringify({
-        title: p.title || '',
-        profile_url: p.profileUrl || '',
-        profile_image: p.profileImage || '',
-        total_engagement: p.totalEngagement || 0,
-      }),
+    // Check if row exists (GET)
+    const existing = await supabaseQuery('GET', 'industry_influencers', {
+      'name': `eq.${p.name}`,
+      'industry': `eq.${industry}`,
+      'select': 'id',
+      'limit': '1',
     });
 
-    const patchData = await patchRes.json().catch(() => []);
-    if (Array.isArray(patchData) && patchData.length > 0) {
-      updatedProfiles++;
+    if (existing && existing.length > 0) {
+      // Update via PATCH (no return representation needed)
+      const rowId = existing[0].id;
+      const patchRes = await fetch(`${sbUrl}/rest/v1/industry_influencers?id=eq.${rowId}`, {
+        method: 'PATCH',
+        headers: {
+          'apikey': sbKey,
+          'Authorization': `Bearer ${sbKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          title: p.title || '',
+          profile_url: getUrl(p),
+          profile_image: getImg(p),
+          total_engagement: getEng(p),
+        }),
+      });
+      if (patchRes.ok) updatedProfiles++;
     } else {
-      // Not found — insert as new
+      // Insert new row
       const result = await supabaseQuery('POST', 'industry_influencers', {
         body: {
           industry,
           name: p.name,
           title: p.title || '',
-          profile_url: p.profileUrl || '',
-          profile_image: p.profileImage || '',
-          total_engagement: p.totalEngagement || 0,
+          profile_url: getUrl(p),
+          profile_image: getImg(p),
+          total_engagement: getEng(p),
           created_at: new Date().toISOString(),
         },
       });
@@ -653,18 +679,32 @@ app.post('/api/admin/update-profiles', async (req, res) => {
     }
   }
 
-  // Add posts
+  // Add posts (dedupe by author + post_url)
   for (const post of (posts || [])) {
+    const postUrl = getPostUrl(post);
+    const author = getAuthor(post);
+
+    // Skip if an identical post_url already exists for this industry
+    if (postUrl) {
+      const existingPost = await supabaseQuery('GET', 'industry_posts', {
+        'industry': `eq.${industry}`,
+        'post_url': `eq.${postUrl}`,
+        'select': 'id',
+        'limit': '1',
+      });
+      if (existingPost && existingPost.length > 0) continue;
+    }
+
     const result = await supabaseQuery('POST', 'industry_posts', {
       body: {
         industry,
-        author_name: post.authorName || '',
+        author_name: author,
         text: post.text || '',
         likes: post.likes || 0,
         comments: post.comments || 0,
         reposts: post.reposts || 0,
         engagement: (post.likes || 0) + (post.comments || 0) * 3 + (post.reposts || 0) * 2,
-        post_url: post.postUrl || '',
+        post_url: postUrl,
         created_at: new Date().toISOString(),
       },
     });
