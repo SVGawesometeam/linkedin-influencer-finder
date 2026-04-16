@@ -662,6 +662,86 @@ app.post('/api/admin/update-profiles', async (req, res) => {
 });
 
 // =============================================
+// API: Dedupe industry (admin) — keeps highest-engagement row per name
+// =============================================
+app.post('/api/admin/dedupe-industry', async (req, res) => {
+  const { industry } = req.body;
+  if (!industry) return res.status(400).json({ error: 'industry required' });
+
+  const sbUrl = process.env.SUPABASE_URL;
+  const sbKey = process.env.SUPABASE_ANON_KEY;
+  if (!sbUrl || !sbKey) return res.status(500).json({ error: 'Supabase not configured' });
+
+  try {
+    const profiles = await supabaseQuery('GET', 'industry_influencers', {
+      'industry': `eq.${industry}`,
+      'select': '*',
+      'order': 'total_engagement.desc',
+    });
+
+    // Group by name (case-insensitive), keep highest-engagement row (first per desc sort)
+    const byName = new Map();
+    const toDelete = [];
+    for (const p of (profiles || [])) {
+      const key = (p.name || '').trim().toLowerCase();
+      if (!key) continue;
+      if (byName.has(key)) {
+        toDelete.push(p.id);
+      } else {
+        byName.set(key, p.id);
+      }
+    }
+
+    let deletedProfiles = 0;
+    for (const id of toDelete) {
+      const delRes = await fetch(`${sbUrl}/rest/v1/industry_influencers?id=eq.${id}`, {
+        method: 'DELETE',
+        headers: { 'apikey': sbKey, 'Authorization': `Bearer ${sbKey}` },
+      });
+      if (delRes.ok) deletedProfiles++;
+    }
+
+    // Dedupe posts by (author_name, post_url or text prefix)
+    const posts = await supabaseQuery('GET', 'industry_posts', {
+      'industry': `eq.${industry}`,
+      'select': '*',
+      'order': 'engagement.desc',
+    });
+    const byPost = new Map();
+    const postsToDelete = [];
+    for (const p of (posts || [])) {
+      const key = `${(p.author_name || '').toLowerCase()}|${p.post_url || (p.text || '').slice(0, 60)}`;
+      if (byPost.has(key)) {
+        postsToDelete.push(p.id);
+      } else {
+        byPost.set(key, p.id);
+      }
+    }
+    let deletedPosts = 0;
+    for (const id of postsToDelete) {
+      const delRes = await fetch(`${sbUrl}/rest/v1/industry_posts?id=eq.${id}`, {
+        method: 'DELETE',
+        headers: { 'apikey': sbKey, 'Authorization': `Bearer ${sbKey}` },
+      });
+      if (delRes.ok) deletedPosts++;
+    }
+
+    res.json({
+      success: true,
+      totalProfiles: profiles?.length || 0,
+      uniqueProfiles: byName.size,
+      deletedProfiles,
+      totalPosts: posts?.length || 0,
+      uniquePosts: byPost.size,
+      deletedPosts,
+    });
+  } catch (err) {
+    console.error('Dedupe error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// =============================================
 // API: Copy industry slug (admin) — inserts duplicate rows under new slug
 // =============================================
 app.post('/api/admin/copy-industry', async (req, res) => {
