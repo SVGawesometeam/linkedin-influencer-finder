@@ -838,6 +838,20 @@ app.get('/api/admin/inspect/:slug', async (req, res) => {
   }
 });
 
+app.get('/api/admin/inspect-posts/:slug', async (req, res) => {
+  const slug = req.params.slug;
+  try {
+    const posts = await supabaseQuery('GET', 'industry_posts', {
+      'industry': `eq.${slug}`,
+      'select': '*',
+      'order': 'engagement.desc',
+    });
+    res.json({ count: posts?.length || 0, posts: posts || [] });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Admin: refresh post engagement stats via Apify (by post URL)
 // Body: { industry: "slug", actor?: "actorId", inputKey?: "postUrls"|"urls"|"startUrls", maxChargeUsd?: 0.5, limit?: 5 }
 app.post('/api/admin/refresh-posts', async (req, res) => {
