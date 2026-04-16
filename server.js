@@ -838,6 +838,156 @@ app.get('/api/admin/inspect/:slug', async (req, res) => {
   }
 });
 
+// Admin: refresh post engagement stats via Apify (by post URL)
+// Body: { industry: "slug", actor?: "actorId", inputKey?: "postUrls"|"urls"|"startUrls", maxChargeUsd?: 0.5, limit?: 5 }
+app.post('/api/admin/refresh-posts', async (req, res) => {
+  const { industry, actor, inputKey, maxChargeUsd, limit } = req.body;
+  if (!industry) return res.status(400).json({ error: 'industry required' });
+
+  const sbUrl = process.env.SUPABASE_URL;
+  const sbKey = process.env.SUPABASE_ANON_KEY;
+  if (!sbUrl || !sbKey) return res.status(500).json({ error: 'Supabase not configured' });
+
+  try {
+    // Fetch posts to refresh (those with a post_url)
+    const posts = await supabaseQuery('GET', 'industry_posts', {
+      'industry': `eq.${industry}`,
+      'post_url': 'not.is.null',
+      'select': '*',
+      'order': 'engagement.desc',
+      'limit': String(limit || 10),
+    });
+
+    if (!posts || posts.length === 0) {
+      return res.json({ success: false, reason: 'no posts with URLs' });
+    }
+
+    const postUrls = posts.map(p => p.post_url).filter(u => u && /linkedin\.com/.test(u));
+    if (postUrls.length === 0) return res.json({ success: false, reason: 'no valid linkedin urls' });
+
+    const actorId = actor || 'harvestapi~linkedin-post';
+    const key = inputKey || 'postUrls';
+    const input = {};
+    if (key === 'startUrls') {
+      input.startUrls = postUrls.map(u => ({ url: u }));
+    } else {
+      input[key] = postUrls;
+    }
+
+    console.log(`refresh-posts: actor=${actorId} inputKey=${key} count=${postUrls.length}`);
+    const items = await runApifyActor(actorId, input, maxChargeUsd || 0.5).catch(e => ({ error: e.message }));
+
+    if (items && items.error) {
+      return res.json({ success: false, actor: actorId, inputKey: key, error: items.error });
+    }
+
+    if (!Array.isArray(items) || items.length === 0) {
+      return res.json({ success: false, actor: actorId, inputKey: key, reason: 'no items returned', sampleInput: input });
+    }
+
+    // Build URL -> fresh-stats map
+    const normalize = (u) => String(u || '').split('?')[0].replace(/\/$/, '').toLowerCase();
+    const freshByUrl = new Map();
+    for (const it of items) {
+      // Try multiple URL fields
+      const url = it.url || it.postUrl || it.linkedinUrl || it.shareUrl || (it.post && it.post.url) || '';
+      if (!url) continue;
+      const eng = it.engagement || it.stats || it.reactions || {};
+      const likes = Number(eng.likes ?? eng.reactions ?? eng.reactionsCount ?? it.numLikes ?? it.likesCount ?? it.totalReactions ?? 0) || 0;
+      const comments = Number(eng.comments ?? eng.commentsCount ?? it.numComments ?? it.commentsCount ?? 0) || 0;
+      const reposts = Number(eng.shares ?? eng.reposts ?? eng.repostsCount ?? eng.sharesCount ?? it.numShares ?? it.sharesCount ?? it.repostsCount ?? 0) || 0;
+      freshByUrl.set(normalize(url), { likes, comments, reposts });
+    }
+
+    // Apply updates
+    let updated = 0;
+    const details = [];
+    for (const post of posts) {
+      const fresh = freshByUrl.get(normalize(post.post_url));
+      if (!fresh) {
+        details.push({ url: post.post_url, status: 'no-match' });
+        continue;
+      }
+      const newEng = fresh.likes + fresh.comments * 3 + fresh.reposts * 2;
+      // Try PATCH
+      const patchRes = await fetch(`${sbUrl}/rest/v1/industry_posts?id=eq.${post.id}`, {
+        method: 'PATCH',
+        headers: {
+          'apikey': sbKey,
+          'Authorization': `Bearer ${sbKey}`,
+          'Content-Type': 'application/json',
+          'Prefer': 'return=representation',
+        },
+        body: JSON.stringify({
+          likes: fresh.likes,
+          comments: fresh.comments,
+          reposts: fresh.reposts,
+          engagement: newEng,
+        }),
+      });
+      const patchText = await patchRes.text();
+      let rows = 0;
+      try { rows = JSON.parse(patchText).length || 0; } catch (_) {}
+
+      if (rows > 0) {
+        updated++;
+        details.push({ url: post.post_url, status: 'updated', before: { likes: post.likes, comments: post.comments, reposts: post.reposts }, after: fresh });
+      } else {
+        // RLS fallback: delete+insert
+        const delRes = await fetch(`${sbUrl}/rest/v1/industry_posts?id=eq.${post.id}`, {
+          method: 'DELETE',
+          headers: { 'apikey': sbKey, 'Authorization': `Bearer ${sbKey}` },
+        });
+        if (delRes.ok) {
+          const insertRes = await fetch(`${sbUrl}/rest/v1/industry_posts`, {
+            method: 'POST',
+            headers: {
+              'apikey': sbKey,
+              'Authorization': `Bearer ${sbKey}`,
+              'Content-Type': 'application/json',
+              'Prefer': 'return=representation',
+            },
+            body: JSON.stringify({
+              industry: post.industry,
+              author_name: post.author_name,
+              text: post.text,
+              likes: fresh.likes,
+              comments: fresh.comments,
+              reposts: fresh.reposts,
+              engagement: newEng,
+              post_url: post.post_url,
+              created_at: post.created_at || new Date().toISOString(),
+            }),
+          });
+          if (insertRes.ok) {
+            updated++;
+            details.push({ url: post.post_url, status: 'delete+insert', before: { likes: post.likes, comments: post.comments, reposts: post.reposts }, after: fresh });
+          } else {
+            const ib = await insertRes.text();
+            details.push({ url: post.post_url, status: 'insert-fail', body: ib.slice(0, 200) });
+          }
+        } else {
+          details.push({ url: post.post_url, status: 'delete-fail' });
+        }
+      }
+    }
+
+    res.json({
+      success: true,
+      industry,
+      actor: actorId,
+      inputKey: key,
+      itemsReturned: items.length,
+      postsAttempted: posts.length,
+      updated,
+      details,
+    });
+  } catch (err) {
+    console.error('refresh-posts error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post('/api/admin/dedupe-industry', async (req, res) => {
   const { industry } = req.body;
   if (!industry) return res.status(400).json({ error: 'industry required' });
