@@ -875,12 +875,28 @@ app.post('/api/admin/replace-profiles', async (req, res) => {
 
     let deleted = 0;
     let deleteFailed = 0;
+    let deleteSilent = 0;
+    const delErrors = [];
     for (const row of (existing || [])) {
       const delRes = await fetch(`${sbUrl}/rest/v1/industry_influencers?id=eq.${row.id}`, {
         method: 'DELETE',
-        headers: { 'apikey': sbKey, 'Authorization': `Bearer ${sbKey}` },
+        headers: {
+          'apikey': sbKey,
+          'Authorization': `Bearer ${sbKey}`,
+          'Prefer': 'return=representation',
+        },
       });
-      if (delRes.ok) deleted++; else deleteFailed++;
+      const delText = await delRes.text();
+      if (!delRes.ok) {
+        deleteFailed++;
+        if (delErrors.length < 3) delErrors.push(delText.slice(0, 200));
+        continue;
+      }
+      // PostgREST returns an array of deleted rows; empty array = RLS silently blocked
+      let rows = 0;
+      try { rows = JSON.parse(delText).length || 0; } catch (_) {}
+      if (rows > 0) deleted++;
+      else deleteSilent++;
     }
 
     // 2) Insert new rows
@@ -916,7 +932,9 @@ app.post('/api/admin/replace-profiles', async (req, res) => {
       industry,
       existing: existing?.length || 0,
       deleted,
+      deleteSilent,
       deleteFailed,
+      delErrors,
       inserted,
       insertFailed,
       errors: errors.slice(0, 5),
