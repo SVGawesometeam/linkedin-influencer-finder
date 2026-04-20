@@ -535,16 +535,37 @@ app.post('/api/influencers', async (req, res) => {
 // =============================================
 // API: Get industry influencers (pre-built data)
 // =============================================
+// Slugs whose profile lists were replaced by the v3 curated set on 2026-04-20.
+// For these slugs we filter to only rows inserted on/after the cutoff, because
+// the anon-key DELETE is silently RLS-blocked — the old rows still exist in DB
+// but we never want to surface them again.
+const V3_CUTOFF = '2026-04-20T14:00:00Z';
+const V3_SLUGS = new Set([
+  'advertising', 'business-consulting', 'content-marketing-copywriting',
+  'cybersecurity', 'design-ux-creative', 'ecommerce', 'education',
+  'entrepreneurship-startups', 'executive-coaching-leadership', 'finance',
+  'healthcare-healthtech', 'higher-education', 'human-resources', 'it-services',
+  'legal-legaltech', 'management-consulting', 'marketing',
+  'nonprofit-social-impact', 'public-relations-communications', 'real-estate',
+  'recruitment-talent-acquisition', 'sales-business-development',
+  'software-development', 'supply-chain-logistics', 'venture-capital-investing',
+]);
+
 app.get('/api/industry/:slug', async (req, res) => {
   const { slug } = req.params;
 
   try {
-    // Try to get from Supabase industry_influencers table
-    const profiles = await supabaseQuery('GET', 'industry_influencers', {
+    // Try to get from Supabase industry_influencers table.
+    // For v3-replaced slugs, filter out old rows via created_at cutoff.
+    const profileQuery = {
       'industry': `eq.${slug}`,
       'select': '*',
       'order': 'total_engagement.desc',
-    });
+    };
+    if (V3_SLUGS.has(slug)) {
+      profileQuery['created_at'] = `gte.${V3_CUTOFF}`;
+    }
+    const profiles = await supabaseQuery('GET', 'industry_influencers', profileQuery);
 
     if (!profiles || profiles.length === 0) {
       return res.status(404).json({ error: 'This industry is coming soon. We\'re building the influencer list.' });
