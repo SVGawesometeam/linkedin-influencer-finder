@@ -855,6 +855,78 @@ app.get('/api/admin/inspect-posts/:slug', async (req, res) => {
   }
 });
 
+// Admin: REPLACE all profiles for an industry — deletes existing rows, inserts fresh ones.
+// Body: { industry: "slug", profiles: [{ name, title, profile_url, profile_image?, total_engagement? }] }
+app.post('/api/admin/replace-profiles', async (req, res) => {
+  const { industry, profiles } = req.body;
+  if (!industry) return res.status(400).json({ error: 'industry required' });
+  if (!Array.isArray(profiles)) return res.status(400).json({ error: 'profiles array required' });
+
+  const sbUrl = process.env.SUPABASE_URL;
+  const sbKey = process.env.SUPABASE_ANON_KEY;
+  if (!sbUrl || !sbKey) return res.status(500).json({ error: 'Supabase not configured' });
+
+  try {
+    // 1) Get all existing rows for this industry
+    const existing = await supabaseQuery('GET', 'industry_influencers', {
+      'industry': `eq.${industry}`,
+      'select': 'id',
+    });
+
+    let deleted = 0;
+    let deleteFailed = 0;
+    for (const row of (existing || [])) {
+      const delRes = await fetch(`${sbUrl}/rest/v1/industry_influencers?id=eq.${row.id}`, {
+        method: 'DELETE',
+        headers: { 'apikey': sbKey, 'Authorization': `Bearer ${sbKey}` },
+      });
+      if (delRes.ok) deleted++; else deleteFailed++;
+    }
+
+    // 2) Insert new rows
+    let inserted = 0;
+    let insertFailed = 0;
+    const errors = [];
+    for (const p of profiles) {
+      if (!p || !p.name) continue;
+      const body = {
+        industry,
+        name: String(p.name).trim(),
+        title: String(p.title || p.description || '').trim(),
+        profile_url: String(p.profile_url || p.profileUrl || '').trim(),
+        profile_image: String(p.profile_image || p.profileImage || '').trim(),
+        total_engagement: Number(p.total_engagement || p.totalEngagement || 0) || 0,
+      };
+      const r = await fetch(`${sbUrl}/rest/v1/industry_influencers`, {
+        method: 'POST',
+        headers: {
+          'apikey': sbKey,
+          'Authorization': `Bearer ${sbKey}`,
+          'Content-Type': 'application/json',
+          'Prefer': 'return=representation',
+        },
+        body: JSON.stringify(body),
+      });
+      if (r.ok) inserted++;
+      else { insertFailed++; errors.push((await r.text()).slice(0, 120)); }
+    }
+
+    res.json({
+      success: true,
+      industry,
+      existing: existing?.length || 0,
+      deleted,
+      deleteFailed,
+      inserted,
+      insertFailed,
+      errors: errors.slice(0, 5),
+    });
+  } catch (err) {
+    console.error('replace-profiles error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Admin: refresh post engagement stats via Apify (by post URL)
 // Body: { industry: "slug", actor?: "actorId", inputKey?: "postUrls"|"urls"|"startUrls", maxChargeUsd?: 0.5, limit?: 5 }
 app.post('/api/admin/refresh-posts', async (req, res) => {
